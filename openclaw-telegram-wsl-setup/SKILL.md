@@ -1,0 +1,676 @@
+﻿---
+name: openclaw-telegram-wsl-setup
+description: "Set up and repair OpenClaw's Telegram channel on Windows through WSL2. Use when the user wants OpenClaw to reply through Telegram, asks how OpenClaw was installed or should be kept running in WSL, needs WSL/OpenClaw/gateway readiness checks, gateway keepalive/autostart repair, safe Telegram bot token entry, proxy-aware Telegram connectivity, pairing approval, channel startup verification, or diagnosis of Telegram messages that are not received, not answered, answered only after a long delay, or only work while WSL is awake."
+---
+
+# OpenClaw Telegram WSL Setup
+
+Use this skill to make Telegram the working remote-control channel for OpenClaw on Windows via WSL2. The workflow is interactive: observe state automatically, ask the user only for UI-only actions or secrets, configure Telegram safely, wait for the channel to actually start, and verify that a Telegram message receives a reply.
+
+## Opening
+
+For a new install, choose the installation language before explaining architecture. The first response after this skill loads should:
+
+1. Ask the user to choose the installation language.
+2. Continue entirely in the selected language.
+3. Explain the difference between Windows-native installation and WSL2 installation.
+4. Recommend Ubuntu on WSL2 as the default path.
+5. Confirm the plan before starting installation commands.
+
+Use this first prompt when the language is not already explicit:
+
+```text
+Please choose the installation language:
+
+1. 中文
+2. English
+```
+
+If the user is already clearly using Chinese or English, treat that as the language choice and do not ask again. If this is a continuation, keep the current conversation language.
+
+After the language is known, explain the architecture in that language before running commands. Chinese example:
+
+```text
+开始之前，Windows 上运行 OpenClaw 通常有两种方式：
+
+1. Windows 原生安装：表面上少装一个 Ubuntu，但 Telegram 机器人需要长期在线的 gateway。后台常驻、权限、路径、本地网络和代理行为在 Windows 原生环境里更容易变得不可预测。
+2. Ubuntu on WSL2：前期多一步 WSL2/Ubuntu 设置，但 OpenClaw 可以运行在更接近 Linux 的环境里，systemd 用户服务、权限、路径和 gateway 行为更稳定。
+
+为了让 Telegram 机器人可靠在线，我推荐使用 Ubuntu on WSL2。安装流程会默认使用 Ubuntu，然后配置 OpenClaw、gateway 服务、后台常驻运行和 Telegram。
+
+我会按推荐路径安装：Windows + WSL2 + Ubuntu + Ubuntu 内的 OpenClaw + systemd user gateway + 后台常驻运行 + Telegram。只有在 Windows/Ubuntu 初始化、密码、BotFather、token 或 pairing 必须你操作时，我才会暂停让你处理。
+
+现在开始吗？
+```
+
+English example:
+
+```text
+Before we start, there are two common ways to run OpenClaw on Windows:
+
+1. Windows-native install: it looks simpler because there is no Ubuntu setup, but a Telegram bot needs a long-running gateway. Background services, permissions, paths, local networking, and proxy behavior are less predictable in a native Windows setup.
+2. Ubuntu on WSL2: it takes one extra setup step, but OpenClaw runs in a Linux-like environment where systemd user services, permissions, paths, and gateway behavior are more stable.
+
+For a reliable Telegram bot, I recommend Ubuntu on WSL2. The install will use Ubuntu by default, then configure OpenClaw, the gateway service, background persistence, and Telegram.
+
+I will install using the recommended path: Windows + WSL2 + Ubuntu + OpenClaw inside Ubuntu + systemd user gateway + background persistence + Telegram. I will only pause when Windows/Ubuntu setup, passwords, BotFather, tokens, or pairing require your input.
+
+Shall I start?
+```
+
+If the user confirms, begin the OpenClaw installation process. If WSL2/OpenClaw are already installed, skip the full installation pitch after this opening and continue with verification/repair. If the user explicitly rejects WSL2/Ubuntu, explain in the selected language that Windows-native setup is outside the recommended no-surprises path and ask whether to continue anyway.
+
+## Distro Policy
+
+For greenfield setup, standardize on **Ubuntu under WSL2**. This is the no-brainer path. Do not offer distro selection during normal installation. Use a different distro only when the user explicitly asks or an existing working OpenClaw install already lives there.
+
+Run these baseline Windows checks first:
+
+```powershell
+wsl --status
+wsl --version
+wsl --list --verbose
+$startup = [Environment]::GetFolderPath('Startup')
+Get-ChildItem -LiteralPath $startup -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'OpenClaw|WSL|Keepalive' }
+```
+
+Interpret them this way:
+
+- `wsl --status`: confirm WSL is available and whether WSL2 is the default.
+- `wsl --version`: confirm the modern WSL package is installed. If unavailable, continue only if `wsl --status` and `wsl --list --verbose` still provide enough state.
+- `wsl --list --verbose`: confirm whether `Ubuntu` exists, whether it is `VERSION 2`, and whether another distro already owns OpenClaw.
+
+Use this decision tree:
+
+1. New install:
+   - Use `Ubuntu` on WSL2.
+   - If WSL is missing, install Ubuntu with `wsl --install -d Ubuntu`.
+   - If WSL exists but Ubuntu is missing, install Ubuntu with `wsl --install -d Ubuntu`.
+   - If Ubuntu exists but is `VERSION 1`, convert it with `wsl --set-version Ubuntu 2` before installing OpenClaw.
+   - If Windows reports that a reboot is required, stop the install, ask the user to reboot, and resume after they return. Do not continue with OpenClaw commands until Ubuntu launches successfully.
+   - After Ubuntu is installed, have the user complete the first Ubuntu launch and Linux username/password creation if prompted.
+
+2. Existing OpenClaw install:
+   - Use the distro where `command -v openclaw` succeeds.
+   - Prefer the distro where `openclaw-gateway.service` already exists.
+   - Do not migrate a working non-Ubuntu install to Ubuntu unless the user asks.
+
+3. Multiple distros:
+   - If one distro has `openclaw-gateway.service`, use it.
+   - If one distro has `command -v openclaw`, use it.
+   - If no distro owns OpenClaw yet, use `Ubuntu` for the new setup.
+   - Ask only when the user explicitly wants to use an existing non-Ubuntu distro or when two existing distros appear to own conflicting OpenClaw installs.
+
+4. Non-Ubuntu distro:
+   - Support it as an advanced existing-install path.
+   - Do not make it the default tutorial path.
+   - Replace `Ubuntu` in keepalive/autostart commands only after confirming that distro is the intended OpenClaw owner.
+
+5. Windows-native OpenClaw:
+   - Do not use it for gateway/Telegram service work unless the user explicitly rejects WSL2.
+   - If the user rejects WSL2, explain that this is outside the recommended no-surprises path and that service, permission, path, proxy, and keepalive behavior may require more manual repair.
+
+Useful commands for the default Ubuntu path:
+
+```powershell
+wsl --install -d Ubuntu
+wsl --set-version Ubuntu 2
+wsl -d Ubuntu -- bash -lc "id -un && pwd"
+```
+
+## Greenfield Install Flow
+
+For a user who wants OpenClaw + Telegram installed from scratch on Windows, follow this default sequence without asking them to choose architecture. This is an assisted installer flow: keep the user oriented, keep the desktop quiet, close successful or stale windows promptly, and give detailed instructions for every action only the user can perform.
+
+### Window And Prompt Discipline
+
+Windows + WSL installation can open multiple PowerShell, Ubuntu, installer, error, token, or helper windows. Manage the lifecycle of every window explicitly:
+
+- Before asking the user to type anything, identify the exact window they should use by title, visible prompt, or command text.
+- Keep windows open only while they are actively needed for a password, Linux username, token entry, BotFather action, pairing code, visible installer progress, or an intentional long-running keepalive.
+- Close or tell the user to close successful installer/helper windows after their result has been verified and no further user input is needed there.
+- Close or tell the user to close stale error/helper windows only after their useful diagnostic state has been captured or is no longer needed.
+- Prefer hidden/minimized background processes for keepalive. A keepalive may continue running, but it should not leave an unnecessary interactive window in the user's way when a hidden/minimized option is available.
+- Do not make the user compare multiple terminal windows. Use commands to identify the active WSL distro, gateway service, and process state whenever possible.
+- If a command opens a new terminal unexpectedly, explain whether it is expected, whether it should stay open, and what text/prompt the user should look for.
+- If a command fails in one terminal and a better path exists, name the failed window as stale and move the user to the active path.
+- Never ask the user to paste bot tokens or API keys into chat. Token entry belongs in a local terminal prompt or provider UI.
+
+Window state rule:
+
+- **Needs user action**: keep the relevant window visible and describe exactly what to do.
+- **Running in background**: hide or minimize when possible, and tell the user it is expected to stay running.
+- **Succeeded**: verify the result from commands, then close or tell the user to close the window.
+- **Failed/stale**: capture the useful error, then close or tell the user to close the window and continue on the active path.
+
+For each user-required action, provide:
+
+- **Where**: the exact window or app to use, such as "Ubuntu window", "BotFather chat", or "the terminal asking `Telegram bot token:`".
+- **What to do**: the concrete input or click sequence.
+- **What success looks like**: the prompt, message, or status that means the action completed.
+- **What to close**: which successful or stale windows can be closed after the action succeeds.
+- **What not to do**: especially do not close active setup windows, do not paste tokens into chat, and do not restart randomly during gateway startup.
+
+### Command Discovery Discipline
+
+Codex may be able to infer and run the right install commands from the current environment, but the skill should not rely on memory alone. For Node/npm, OpenClaw install, and gateway service setup:
+
+- First inspect the current state with narrow commands.
+- Prefer the installed OpenClaw CLI help, `openclaw doctor`, and `openclaw doctor --fix` when available.
+- If OpenClaw is not installed, use the current recommended package path for the environment; ask before networked installs or updates.
+- Do not hard-code stale commands when the local CLI can reveal the current command shape.
+- After each install/repair command, verify with an observable success check before moving on.
+
+### Default Phase Order
+
+1. Confirm WSL support and install Ubuntu on WSL2 if missing.
+   - User action may be required for Windows reboot, Microsoft Store/WSL prompts, or first Ubuntu launch.
+   - Tell the user exactly which Ubuntu window to keep open for Linux user creation.
+   - After Ubuntu setup succeeds and `wsl -d Ubuntu -- bash -lc "id -un && pwd"` works, close or tell the user to close any extra Ubuntu setup windows that are no longer needed.
+
+2. Open or enter Ubuntu and confirm the Linux user is ready.
+   - Verify with `wsl -d Ubuntu -- bash -lc "id -un && pwd"`.
+   - If Ubuntu asks for a Linux username/password, guide the user through it and wait.
+
+3. Install Node/npm prerequisites if OpenClaw requires them and they are missing.
+   - First discover current state with `node --version`, `npm --version`, and package-manager checks.
+   - If installing dependencies opens prompts or asks for a password, tell the user exactly what prompt is expected.
+   - Close successful dependency installer windows after `node --version` and `npm --version` verify the install.
+
+4. Install OpenClaw inside Ubuntu.
+   - Do not use Windows-native OpenClaw commands for gateway/Telegram service work.
+   - Discover the current install path from official/current CLI or package manager state instead of relying only on memory.
+   - Verify with `command -v openclaw` and `openclaw --version`.
+   - Close successful installer/helper windows after the binary and version are verified.
+
+5. Run `openclaw doctor` and fix required issues.
+   - Treat required gateway/service issues as blockers.
+   - Treat optional startup optimization or informational warnings as non-blocking unless they explain the current failure.
+   - Close successful doctor/fix helper windows after required issues are verified as fixed.
+
+6. Enable or repair `openclaw-gateway.service` as a WSL `systemd --user` service.
+   - Prefer OpenClaw-provided repair/install commands discovered from `openclaw doctor`, `openclaw doctor --fix`, or relevant CLI help.
+   - Verify service state before continuing.
+   - If service repair opens helper windows, keep only the active helper path and close successful or stale windows after capturing/verifying results.
+
+7. Configure or verify OpenClaw visibility/permission scope with explicit user confirmation.
+   - Treat this as an explicit install phase: OpenClaw should only see the files, folders, tools, and execution surface the user intends.
+   - Show the proposed visibility/permission scope in plain language and ask the user to confirm before continuing.
+   - Let the user decide scope in natural language; translate their intent into the supported OpenClaw configuration path.
+   - Use current OpenClaw CLI help, Control UI, or doctor output to discover the supported configuration path; do not invent stale permission commands.
+   - Ask the user before broadening filesystem visibility, execution policy, tool access, or external integrations.
+   - Verify the selected scope without printing secrets or raw config.
+
+8. Add or verify keepalive/autostart quietly so Ubuntu stays awake and the gateway starts after Windows login.
+   - Treat this as internal infrastructure work, not a separate user-facing module.
+   - Mention it to the user only as "I will keep OpenClaw running in the background after login" unless a permission prompt, visible window, or explicit confirmation is needed.
+   - Prefer hidden/minimized keepalive startup. If using a Startup-folder `.cmd`, explain whether any minimized WSL process is expected to remain running.
+   - Close successful setup windows after verifying the keepalive file/task exists and the gateway can be reached.
+
+9. Verify `openclaw gateway probe`.
+   - Do not continue to Telegram until gateway responds, not merely listens.
+
+10. Configure Telegram using a local token prompt or token file.
+   - Guide the user through BotFather in Telegram if they do not already have a bot.
+   - Token entry happens only in the local terminal prompt, never in chat.
+   - Close token-entry windows after `openclaw channels status --json --timeout 30000` shows the token/config is available, unless the window is also the active gateway/keepalive path.
+
+11. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
+   - Explain the 60-120 second startup window.
+   - Ask for a fresh message only after Telegram is ready or the startup grace period has passed.
+   - Close successful setup windows after end-to-end Telegram reply verification, leaving only intentional hidden/minimized keepalive infrastructure.
+
+Only diverge from this path if the user already has a working OpenClaw install elsewhere, explicitly refuses WSL2/Ubuntu, or the environment blocks Ubuntu installation.
+
+## Installation Baseline Discovery
+
+Before assuming Telegram is misconfigured or reinstalling OpenClaw, classify the current machine. This keeps the greenfield install path recoverable when the user has already tried an install, rebooted halfway through, opened multiple windows, or has an older OpenClaw setup.
+
+A healthy no-brainer Windows + WSL OpenClaw setup usually has this structure:
+
+- Windows runs Ubuntu through WSL2 for new installs.
+- OpenClaw gateway operations run inside Ubuntu or the existing chosen WSL distro, not from a Windows-native shell.
+- The working binary lives under the WSL user's package-manager prefix, commonly `~/.local`, `~/.npm-global`, `/usr/local`, or another npm/pnpm-managed prefix.
+- Gateway runs as a WSL `systemd --user` service named `openclaw-gateway.service`.
+- The gateway listens on loopback port `18789` unless configured otherwise and responds to `openclaw gateway probe`.
+- Keepalive/autostart exists so Ubuntu or the chosen distro stays awake and the gateway starts after login/reboot.
+- Telegram uses OpenClaw's `telegram` channel account, usually `default`, in polling mode.
+- A gateway proxy drop-in may exist at `~/.config/systemd/user/openclaw-gateway.service.d/*.conf`, commonly pointing to a WSL-local or Windows-forwarded proxy. Preserve `NO_PROXY=127.0.0.1,localhost,::1`.
+
+Classify into exactly one next action state:
+
+1. **Fresh Windows / WSL missing**: install Ubuntu on WSL2 using the Distro Policy path.
+2. **Ubuntu missing or not WSL2**: install Ubuntu or convert Ubuntu to WSL2 before OpenClaw work.
+3. **Ubuntu ready, OpenClaw missing**: continue to Node/npm and OpenClaw install inside Ubuntu.
+4. **OpenClaw installed, gateway service missing**: repair/install `openclaw-gateway.service` before Telegram.
+5. **Gateway service installed, gateway unreachable**: repair gateway/service/proxy before Telegram.
+6. **Gateway reachable, keepalive missing**: add keepalive/autostart before Telegram final verification.
+7. **Gateway reachable, Telegram missing/unconfigured**: configure Telegram with local token entry.
+8. **Telegram configured but not running/connected**: wait for startup, inspect channel status/logs, then repair channel runner.
+9. **Telegram receives inbound but no outbound**: diagnose pairing, allowlist, agent/model, tasks, or session state.
+10. **Fully working**: gateway reachable, Telegram `running=true`, `connected=true`, and a fresh message receives a reply.
+
+Run Windows-side checks first:
+
+```powershell
+wsl --status
+wsl --version
+wsl --list --verbose
+$startup = [Environment]::GetFolderPath('Startup')
+Get-ChildItem -LiteralPath $startup -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'OpenClaw|WSL|Keepalive' }
+schtasks /Query /TN "OpenClaw WSL Keepalive" 2>$null
+```
+
+If Task Scheduler access is denied or the task is absent, do not treat that alone as failure; a Startup-folder keepalive may be the intended user-level path.
+
+Then run WSL/OpenClaw checks inside the selected distro, usually Ubuntu:
+
+```bash
+id -un
+pwd
+uname -a
+command -v openclaw || true
+openclaw --version 2>/dev/null || true
+node --version 2>/dev/null || true
+npm --version 2>/dev/null || true
+npm config get prefix 2>/dev/null || true
+pnpm config get prefix 2>/dev/null || true
+systemctl --user status openclaw-gateway.service --no-pager -l 2>/dev/null || true
+systemctl --user show openclaw-gateway.service -p FragmentPath -p DropInPaths -p ExecStart -p ActiveState -p SubState 2>/dev/null || true
+ss -ltnp | grep 18789 || true
+openclaw gateway probe 2>/dev/null || true
+openclaw channels list --json 2>/dev/null || true
+openclaw channels status --json --timeout 30000 2>/dev/null || true
+```
+
+Use only presence/status outputs for credentials. Do not print raw `~/.openclaw/openclaw.json`, token files, process environments, or broad credential-bearing logs.
+
+Do not reinstall OpenClaw just because Telegram is not replying. First classify whether OpenClaw itself is missing, gateway is down, keepalive is missing, Telegram is unconfigured, or the agent/model turn is slow. Then continue from the matching phase of the Greenfield Install Flow or the relevant diagnosis section.
+
+## Keepalive Infrastructure
+
+Treat keepalive/autostart as required infrastructure for a reliable Telegram bot, not as a later troubleshooting trick or a separate user-facing module. In a smooth install, Codex should set it up or verify it quietly, then continue. A complete Windows + WSL OpenClaw setup needs both:
+
+1. A WSL `systemd --user` gateway service.
+2. A host-level or distro-level keepalive/autostart path that keeps WSL awake and starts the gateway after login/reboot.
+
+`systemctl --user enable openclaw-gateway.service` and `loginctl enable-linger` are useful, but they may not keep the WSL distro alive by themselves. If Windows stops the distro when no process is alive, Telegram will only work while a shell, diagnostic command, or other WSL process happens to be running.
+
+### Keepalive Setup Order
+
+1. Install or repair OpenClaw inside WSL.
+2. Enable and verify `openclaw-gateway.service`.
+3. Create or verify keepalive/autostart quietly.
+4. Wait for gateway, sidecars, and Telegram startup.
+5. Verify `openclaw gateway probe`.
+6. Verify Telegram `running=true`, `connected=true`.
+7. Test one fresh Telegram message.
+
+User-facing guidance should stay minimal. Prefer saying: "I am setting up OpenClaw to keep running in the background after Windows login." Do not present keepalive as a separate product/module unless the user asks what it is or a visible window/permission prompt requires explanation.
+
+### Keepalive Options
+
+Prefer keepalive options in this order:
+
+1. **Windows Scheduled Task** when the environment allows it. This is the cleanest long-term host-level autostart path, but it may require permissions and can fail with access denied.
+2. **Current-user Startup folder `.cmd`** as the default no-admin path. It is simple, visible to the user, and works well for no-brainer installs.
+3. **Current-session hidden `Start-Process` keepalive** for immediate repair before persistent autostart is created or verified.
+4. **Visible terminal keepalive** only for debugging or when hidden/minimized launch is unavailable.
+
+For the default no-admin Startup-folder path, create a `.cmd` like this:
+
+```cmd
+@echo off
+start "" /min wsl.exe -d Ubuntu -- bash -lc "systemctl --user restart openclaw-gateway.service; exec sleep infinity"
+```
+
+If repairing an existing non-Ubuntu install, replace `Ubuntu` only after confirming that distro is the intended OpenClaw owner.
+
+For immediate current-session repair, prefer a hidden process:
+
+```powershell
+Start-Process -WindowStyle Hidden -FilePath 'wsl.exe' -ArgumentList @('-d','Ubuntu','--','bash','-lc','systemctl --user restart openclaw-gateway.service; exec sleep infinity')
+```
+
+### Window Behavior
+
+- Keepalive should be hidden or minimized whenever possible.
+- Do not leave an interactive terminal visible after keepalive setup succeeds unless the visible terminal is intentionally being used for debugging.
+- Close successful setup windows after verifying the startup entry and gateway state.
+- If using a Startup-folder `.cmd`, explain that a minimized WSL process may remain running after login and that this is expected infrastructure.
+- If the user sees multiple keepalive or helper windows, identify the active one, verify whether keepalive is already running, then close successful or stale extras.
+
+### Idempotency And Duplicate Control
+
+The keepalive should be safe to create or verify repeatedly:
+
+- Restart the gateway service once at launch.
+- Keep a harmless long-lived process alive, such as `sleep infinity`.
+- Avoid printing secrets.
+- Prefer Scheduled Task settings or a single Startup entry to avoid duplicate launches.
+- Before creating another Startup entry, check whether an OpenClaw/WSL keepalive entry already exists in the user Startup folder.
+- If duplicate keepalive processes already exist, do not kill them blindly; first identify whether one is the active path and whether killing it would stop the gateway.
+
+### Success Criteria
+
+Do not mark keepalive complete just because a file or task exists. Mark it complete only after:
+
+1. The persistent startup entry exists, or the user explicitly chose current-session-only repair.
+2. The keepalive launches Ubuntu or the selected distro.
+3. `openclaw-gateway.service` is active after keepalive launch.
+4. `openclaw gateway probe` succeeds.
+5. Telegram can reach `running=true`, `connected=true` after the gateway startup window.
+
+After adding keepalive, test the cold path when feasible:
+
+```powershell
+wsl --shutdown
+# Start the keepalive or simulate Windows login startup.
+wsl -d Ubuntu -- bash -lc 'systemctl --user is-active openclaw-gateway.service; openclaw gateway probe'
+```
+
+If shutdown testing would interrupt the user's active work, explain the risk and postpone it. Replace `Ubuntu` only when the selected install distro is different.
+
+## Visibility And Permission Scope
+
+OpenClaw should not be given broad visibility or execution rights by accident. Treat visibility/permission scope as a required setup checkpoint before Telegram final verification, and require explicit user confirmation before continuing.
+
+Do not configure this silently. Even when the proposed default is least-privilege, summarize it in plain language and ask the user to confirm. The user-facing explanation can be simple: "I need you to confirm what OpenClaw is allowed to see and do."
+
+The user should be able to decide permissions in natural language. Do not require them to know OpenClaw config keys, policy names, or filesystem boundary syntax. Ask simple questions and translate the answer into the supported OpenClaw configuration path.
+
+Natural-language examples:
+
+- "Only let OpenClaw see this project folder."
+- "It can read and write my Playground folder, but not Desktop or Downloads."
+- "It can use Telegram and browser control, but ask me before running shell commands."
+- "It can manage OpenClaw itself, but not unrelated files."
+- "For now, keep it read-only except for OpenClaw config and logs."
+
+Scope areas to verify:
+
+- Filesystem visibility: which folders OpenClaw can read/write.
+- Workspace/home boundaries: whether access is limited to an intended workspace, project folder, or selected safe directories.
+- Tool/execution policy: whether OpenClaw may run shell commands, edit files, start services, or use plugins.
+- External integrations: whether Telegram, browser, memory, proxy, or other integrations are enabled.
+- Secrets: token files and model keys should remain hidden from chat and logs.
+
+Rules:
+
+- Prefer least privilege for new installs.
+- Always ask the user to confirm the final visibility/permission scope before Telegram final verification.
+- Convert the user's natural-language intent into concrete OpenClaw settings, then restate the effective scope before applying it.
+- Use the current OpenClaw CLI help, Control UI, or `openclaw doctor` output to discover the supported configuration path.
+- Do not invent stale permission commands.
+- Do not weaken filesystem boundaries, execution policy, or tool access just to make Telegram work.
+- Ask before expanding access beyond the default workspace or beyond what the user explicitly requested.
+- Verify scope with presence/status checks, not by printing raw config or secrets.
+- If a visibility/permission UI opens, guide the user through the exact choices and close successful setup windows after verification.
+
+## Prime Directive
+
+The goal is a working Telegram path, not a tour of every chat provider.
+
+- Treat Telegram as the primary supported channel.
+- Do not configure or troubleshoot other chat channels unless the user explicitly asks.
+- If another channel is blocking Telegram startup and the user wants Telegram-only operation, ask before disabling that other channel, then disable it cleanly and restart once.
+- Never ask the user to paste bot tokens, API keys, or auth profiles into chat.
+- If the user offers to paste a bot token, API key, or auth profile into chat, stop them and switch to a local terminal prompt or provider UI flow.
+- Never print token values from config, logs, process environments, or command output.
+- Telegram-only cleanup is limited to selected chat channel entries. Never remove or weaken model auth, proxy, gateway, memory, filesystem, execution policy, or other non-chat configuration as part of Telegram setup.
+
+## Operator Loop
+
+1. Observe current state with narrow read-only checks.
+2. Explain the next change in one or two sentences.
+3. Only ask the user to act for passwords, bot tokens, BotFather UI, Telegram pairing, restarts, or security choices.
+4. Run commands yourself when state is command-observable.
+5. After changes, verify one layer at a time.
+6. Avoid repeated restarts and probes while gateway/channel startup is still inside its grace period.
+7. Do not start by reconfiguring Telegram or asking for a token when status already shows `configured=true` and `tokenStatus=available`; first find whether gateway, WSL lifetime, channel runner, or agent/model handling is the failing layer.
+8. When a step opens windows, apply Window And Prompt Discipline: keep only active user-action windows visible, and close successful or stale windows after verification.
+9. Treat background persistence/keepalive as part of the initial install/repair path, but handle it quietly unless user action, permissions, or visible-window explanation is needed.
+
+## Fast Triage
+
+Classify the failure before changing anything:
+
+- `openclaw status` shows gateway unreachable, `ss` has no `127.0.0.1:18789`: gateway is not listening; inspect systemd and WSL lifetime.
+- `ss` shows `127.0.0.1:18789` listening but `openclaw gateway probe` or `curl http://127.0.0.1:18789/` times out: gateway is present but not responding; inspect gateway startup, sidecars, CPU, and recent logs before touching Telegram credentials.
+- `openclaw channels status --json` shows Telegram `configured=true`, `tokenStatus=available`, and `probe.ok=true`: bot/token/API are good; do not ask for a token.
+- Telegram `running=true`, `connected=true`, `lastInboundAt` changes, but `lastOutboundAt` does not: Telegram works; diagnose agent routing, pairing/allowlist, model latency, model auth, task queue, or session locks.
+- The bot replies only after WSL or a diagnostic command wakes the machine: suspect WSL lifetime/autostop first. Check for repeated journal blocks with `Stopping openclaw-gateway.service` and changing WSL boot IDs.
+- If background persistence/keepalive is missing, repair it quietly as internal infrastructure unless user confirmation, permissions, or visible startup-entry explanation is required.
+- If many terminal/helper windows are open, classify window state before continuing: active user prompt, intentional background keepalive, succeeded, or failed/stale.
+- If one gateway probe times out but another RPC/status command succeeds, run a sequential probe/status pair and inspect logs before restarting.
+- First reply after a cold WSL start can take 60-120 seconds because gateway, sidecars, browser, heartbeat, and Telegram provider start asynchronously. Later replies should not require WSL to be poked awake.
+
+## Safe State Checks
+
+Use equivalent commands for the user's distro and OpenClaw path. Prefer absolute paths if non-login systemd environments cannot find `openclaw`.
+
+```powershell
+wsl --status
+wsl --version
+wsl --list --verbose
+```
+
+```bash
+id -un
+pwd
+uname -a
+command -v openclaw || true
+openclaw --version
+systemctl --user is-active openclaw-gateway.service 2>/dev/null || true
+loginctl show-user "$USER" -p Linger 2>/dev/null || true
+ss -ltnp | grep 18789 || true
+openclaw channels list --json 2>/dev/null || true
+openclaw channels status --json --timeout 30000 2>/dev/null || true
+```
+
+For config inspection, print presence only:
+
+```bash
+node -e 'const fs=require("fs"); const p=process.env.HOME+"/.openclaw/openclaw.json"; const c=JSON.parse(fs.readFileSync(p,"utf8")); const t=(c.channels&&c.channels.telegram)||{}; console.log("telegram.present="+!!c.channels?.telegram); console.log("telegram.enabled="+(t.enabled===true)); console.log("telegram.botToken="+(t.botToken?"SET":"MISSING"));'
+```
+
+Prefer OpenClaw CLI status/list outputs over raw config parsing when available. Use raw config parsing only for presence checks and never print credential values.
+
+For logs, prefer narrow channel/gateway commands and redact before relaying:
+
+```bash
+openclaw channels logs --channel telegram --lines 120
+openclaw logs --plain --limit 240 --timeout 30000
+```
+
+Do not use broad recursive searches over `~/.openclaw` or unfiltered `systemctl --user cat`, `journalctl`, `env`, `printenv`, `ps e`, or raw config dumps when credentials may be present. Do not ask the user to screenshot or transcribe windows that may contain bot tokens, API keys, auth profiles, or secret config; if a screenshot is already provided, avoid repeating sensitive values.
+
+## Gateway Readiness
+
+Before Telegram work, prove the local OpenClaw gateway layer is healthy. Do not treat a configured Telegram bot as meaningful until the gateway responds.
+
+Required checks:
+
+1. Confirm the selected WSL distro is running and the Linux user exists.
+2. Confirm OpenClaw is installed inside WSL, not only in Windows-native shell.
+3. Confirm `systemd --user` works.
+4. Confirm `openclaw-gateway.service` exists or can be repaired by OpenClaw.
+5. Confirm port `18789` listens only after gateway has had time to start.
+6. Confirm the gateway responds, not merely listens.
+
+Useful commands:
+
+```bash
+wsl -d Ubuntu -- bash -lc "id -un && pwd"
+command -v openclaw || true
+openclaw --version
+systemctl --user status --no-pager 2>/dev/null || true
+systemctl --user status openclaw-gateway.service --no-pager -l 2>/dev/null || true
+ss -ltnp | grep 18789 || true
+openclaw gateway probe
+curl --max-time 5 -i http://127.0.0.1:18789/ 2>&1 | head -n 20
+```
+
+Interpretation:
+
+- Service missing: use OpenClaw-discovered repair paths such as `openclaw doctor`, `openclaw doctor --fix`, or current CLI help. Do not invent stale service commands.
+- Port missing: inspect service state, WSL lifetime, and gateway logs before Telegram work.
+- Port listening but `gateway probe` or HTTP times out: gateway/sidecar/event-loop is the problem, not Telegram token.
+- Gateway reachable: continue to background persistence and Telegram setup.
+
+If OpenClaw is missing inside WSL, return to the Greenfield install flow. Ask before networked install/update commands. If an existing OpenClaw install is present, prefer `openclaw update --dry-run` before `openclaw update --yes`.
+
+Apply Window And Prompt Discipline: after successful gateway readiness verification, close successful helper windows and leave only intentional hidden/minimized background persistence.
+
+## Network And Proxy
+
+Telegram needs outbound HTTPS to Telegram APIs. Do not assume the user always has a proxy enabled, and do not configure gateway proxy settings until a proxy endpoint is verified.
+
+Test direct WSL network first:
+
+```bash
+curl --max-time 10 -I https://api.telegram.org
+```
+
+If direct access fails or the user commonly toggles a Windows proxy:
+
+- Detect or reuse the current Windows/WSL proxy bridge; do not hard-code ports from another machine.
+- Verify the proxy endpoint before putting it into gateway service environment.
+- Always preserve local bypasses for gateway self-access:
+
+```text
+NO_PROXY=127.0.0.1,localhost,::1
+no_proxy=127.0.0.1,localhost,::1
+```
+
+Final behavior should be adaptive: use direct access when it works; use proxy only when needed and verified. If gateway listens but self-access fails, inspect `NO_PROXY` before changing Telegram credentials.
+
+## Telegram Setup And Pairing
+
+Configure Telegram only after gateway readiness and background persistence are handled. Use BotFather to create or select a bot, but keep token entry local.
+
+Never ask the user to paste the bot token into chat. If the user offers, stop them and switch to a local terminal prompt or provider UI flow.
+
+Prefer a locked token file:
+
+```bash
+mkdir -p "$HOME/.openclaw/secrets"
+chmod 700 "$HOME/.openclaw" "$HOME/.openclaw/secrets"
+read -rsp "Telegram bot token: " OPENCLAW_TELEGRAM_TOKEN
+printf '\n'
+printf '%s\n' "$OPENCLAW_TELEGRAM_TOKEN" > "$HOME/.openclaw/secrets/telegram-bot-token"
+chmod 600 "$HOME/.openclaw/secrets/telegram-bot-token"
+unset OPENCLAW_TELEGRAM_TOKEN
+openclaw channels add --channel telegram --account default --token-file "$HOME/.openclaw/secrets/telegram-bot-token"
+```
+
+If the installed OpenClaw version has different channel arguments, inspect `openclaw channels add --help` and use the current CLI shape. If existing config stores a token directly and the user wants stronger hygiene, migrate it to a token file or OpenClaw secret reference before continuing. If a token was accidentally printed into logs or chat, recommend rotating it in BotFather.
+
+After Telegram is configured:
+
+1. Restart gateway once.
+2. Wait for Telegram channel startup before asking for `/start`.
+3. Ask the user to send `/start` to the bot.
+4. If the bot replies `access not configured` with a pairing code, approve it locally:
+
+```bash
+openclaw pairing approve telegram <PAIRING_CODE>
+```
+
+Treat the pairing code as transient. After approval, ask the user to send one ordinary test message.
+
+Close token-entry or BotFather-helper windows after configuration is verified, unless that window is also the active gateway/background path.
+
+## Startup And Verification
+
+Telegram startup is asynchronous. Do not call every `running=false` a failure, and do not repeatedly restart during the startup grace period.
+
+After any gateway restart:
+
+1. Wait 60-120 seconds for gateway, sidecars, and Telegram provider startup.
+2. Run one status check:
+
+```bash
+openclaw channels status --json --timeout 30000
+```
+
+Interpret status:
+
+- `configured=true`, `running=false`, no `lastError`, recent gateway start: still starting; wait.
+- `running=true`, `connected=true`: ask for one fresh Telegram test message.
+- `lastInboundAt` changes: OpenClaw received the Telegram message.
+- `lastOutboundAt` changes: OpenClaw replied.
+- `lastInboundAt` changes but `lastOutboundAt` does not: Telegram works; diagnose pairing/allowlist/agent/model/task state.
+- No `lastInboundAt`: diagnose token, network, polling, pairing/allowlist, or whether the user messaged before the bot was ready.
+- One `gateway probe` timeout while another RPC/status succeeds: run a sequential probe/status pair and inspect logs before restarting.
+
+End-to-end verification order:
+
+```bash
+openclaw --version
+openclaw config validate
+systemctl --user restart openclaw-gateway.service
+# wait 60-120 seconds
+systemctl --user is-active openclaw-gateway.service
+ss -ltnp | grep 18789 || true
+openclaw gateway probe
+openclaw channels status --json --timeout 30000
+openclaw channels logs --channel telegram --lines 120
+```
+
+Do not claim success until a fresh Telegram message receives a reply, or the status/logs clearly identify the next failing layer. After success, close successful setup windows and leave only intentional hidden/minimized background persistence.
+
+## Failure Diagnosis
+
+Work from the narrowest layer upward and change one layer at a time:
+
+- Gateway not active: inspect systemd user service, WSL state, and port listener.
+- Gateway active but intermittently stopped by WSL: quietly repair background persistence before changing channel config.
+- Gateway port listens but WebSocket/HTTP times out: inspect gateway logs, process state, sidecar startup, and resource pressure; do not ask for a bot token yet.
+- Telegram not running: inspect `channels status`, startup timing, and narrow Telegram logs.
+- `Something went wrong`: channel is alive; diagnose model/tool/agent turn rather than token.
+- `access not configured`: approve pairing or fix allowlist.
+- Network failures: test direct Telegram API access, then proxy bridge, then gateway service proxy env.
+- High CPU or websocket timeout while service is active: inspect whether gateway is still loading channels before changing credentials.
+
+Slow reply triage:
+
+- `lastInboundAt` is null after a fresh user message: Telegram polling, token, network, webhook conflict, pairing, or allowlist is suspect.
+- `lastInboundAt` updates quickly and `lastOutboundAt` stays null: Telegram is healthy; inspect OpenClaw agent/model handling.
+- `openclaw status` shows the default session just became active, but no outbound exists yet: the turn is likely running or waiting on the model/tool layer.
+- Gateway probe is fast while outbound is missing: do not restart gateway immediately; check model auth, model latency, tasks, and recent logs.
+- Gateway probe times out during the same period: inspect event-loop stalls, resource pressure, sidecars, and WSL lifetime.
+
+Useful checks:
+
+```bash
+openclaw status
+openclaw tasks list --json
+openclaw tasks audit --json
+openclaw logs --plain --limit 240 --timeout 30000
+ps -eo pid,ppid,stat,etime,pcpu,pmem,rss,args | grep -E 'openclaw|node' | grep -v grep || true
+```
+
+## Telegram-Only Cleanup
+
+If the user wants a clean Telegram-only channel setup:
+
+1. List configured channels without printing secrets.
+2. Ask before disabling or removing non-Telegram channels.
+3. Remove only the selected channel config and any service drop-ins created solely for that channel.
+4. Reload systemd user units and restart gateway once.
+5. Wait 90-120 seconds and verify Telegram again.
+
+Never delete unrelated model, proxy, filesystem boundary, auth, memory, gateway, or execution-policy configuration while cleaning chat channels.
+
+## Safety Defaults
+
+- Use local terminal prompts for tokens.
+- Prefer token files or OpenClaw secret references over raw config tokens.
+- Redact before relaying logs.
+- Do not print `~/.openclaw/openclaw.json`.
+- Do not use broad grep over credential-bearing config.
+- Do not weaken execution policy or filesystem boundaries while setting up Telegram.
+- Do not enable automatic model fallback unless the user explicitly chooses it.
+- Keep Telegram as the default supported channel for this skill.
+

@@ -1,0 +1,32 @@
+# Local OpenClaw state and secrets
+.openclaw/
+**/.openclaw/
+*.token
+*.secret
+*.key
+*.pem
+.env
+.env.*
+
+# Logs and diagnostics
+*.log
+logs/
+diagnostics/
+screenshots/
+
+# Local keepalive/startup artifacts
+*Keepalive*.cmd
+*keepalive*.cmd
+*.lnk
+
+# Dependencies and caches
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
