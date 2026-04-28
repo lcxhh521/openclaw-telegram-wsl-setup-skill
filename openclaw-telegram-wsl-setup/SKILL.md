@@ -201,21 +201,28 @@ Codex may be able to infer and run the right install commands from the current e
    - Ask the user before broadening filesystem visibility, execution policy, tool access, or external integrations.
    - Verify the selected scope without printing secrets or raw config.
 
-8. Add or verify keepalive/autostart quietly so Ubuntu stays awake and the gateway starts after Windows login.
+8. Choose, configure, and verify the model before Telegram setup.
+   - Treat model readiness as a required checkpoint: Telegram is only the message entry point; the model is what actually produces replies.
+   - Ask the user to choose the model/provider in natural language when no working default model is present.
+   - Use current OpenClaw CLI help, Control UI, or doctor output to discover the supported model configuration path; do not invent stale model commands.
+   - Never ask the user to paste model API keys, auth profiles, or provider secrets into chat.
+   - Verify one local OpenClaw/model response before moving on to Telegram.
+
+9. Add or verify keepalive/autostart quietly so Ubuntu stays awake and the gateway starts after Windows login.
    - Treat this as internal infrastructure work, not a separate user-facing module.
    - Mention it to the user only as "I will keep OpenClaw running in the background after login" unless a permission prompt, visible window, or explicit confirmation is needed.
    - Prefer hidden/minimized keepalive startup. If using a Startup-folder `.cmd`, explain whether any minimized WSL process is expected to remain running.
    - Close successful setup windows after verifying the keepalive file/task exists and the gateway can be reached.
 
-9. Verify `openclaw gateway probe`.
+10. Verify `openclaw gateway probe`.
    - Do not continue to Telegram until gateway responds, not merely listens.
 
-10. Configure Telegram using a local token prompt or token file.
+11. Configure Telegram using a local token prompt or token file.
    - Guide the user through BotFather in Telegram if they do not already have a bot.
    - Token entry happens only in the local terminal prompt, never in chat.
    - Close token-entry windows after `openclaw channels status --json --timeout 30000` shows the token/config is available, unless the window is also the active gateway/keepalive path.
 
-11. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
+12. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
    - Explain the 60-120 second startup window.
    - Ask for a fresh message only after Telegram is ready or the startup grace period has passed.
    - Close successful setup windows after end-to-end Telegram reply verification, leaving only intentional hidden/minimized keepalive infrastructure.
@@ -244,11 +251,12 @@ Classify into exactly one next action state:
 3. **Ubuntu ready, OpenClaw missing**: continue to Node/npm and OpenClaw install inside Ubuntu.
 4. **OpenClaw installed, gateway service missing**: repair/install `openclaw-gateway.service` before Telegram.
 5. **Gateway service installed, gateway unreachable**: repair gateway/service/proxy before Telegram.
-6. **Gateway reachable, keepalive missing**: add keepalive/autostart before Telegram final verification.
-7. **Gateway reachable, Telegram missing/unconfigured**: configure Telegram with local token entry.
-8. **Telegram configured but not running/connected**: wait for startup, inspect channel status/logs, then repair channel runner.
-9. **Telegram receives inbound but no outbound**: diagnose pairing, allowlist, agent/model, tasks, or session state.
-10. **Fully working**: gateway reachable, Telegram `running=true`, `connected=true`, and a fresh message receives a reply.
+6. **Gateway reachable, model missing/unverified**: configure or repair model/provider auth, then verify one local model response before Telegram.
+7. **Model verified, keepalive missing**: add keepalive/autostart before Telegram final verification.
+8. **Model verified, Telegram missing/unconfigured**: configure Telegram with local token entry.
+9. **Telegram configured but not running/connected**: wait for startup, inspect channel status/logs, then repair channel runner.
+10. **Telegram receives inbound but no outbound**: diagnose pairing, allowlist, agent/model, tasks, or session state.
+11. **Fully working**: gateway reachable, model locally verified, keepalive/autostart verified, Telegram `running=true`, `connected=true`, and a fresh message receives a reply.
 
 Run Windows-side checks first:
 
@@ -279,13 +287,16 @@ systemctl --user status openclaw-gateway.service --no-pager -l 2>/dev/null || tr
 systemctl --user show openclaw-gateway.service -p FragmentPath -p DropInPaths -p ExecStart -p ActiveState -p SubState 2>/dev/null || true
 ss -ltnp | grep 18789 || true
 openclaw gateway probe 2>/dev/null || true
+openclaw models --help 2>/dev/null || true
+openclaw models status --plain 2>/dev/null || true
+openclaw infer --help 2>/dev/null || true
 openclaw channels list --json 2>/dev/null || true
 openclaw channels status --json --timeout 30000 2>/dev/null || true
 ```
 
 Use only presence/status outputs for credentials. Do not print raw `~/.openclaw/openclaw.json`, token files, process environments, or broad credential-bearing logs.
 
-Do not reinstall OpenClaw just because Telegram is not replying. First classify whether OpenClaw itself is missing, gateway is down, keepalive is missing, Telegram is unconfigured, or the agent/model turn is slow. Then continue from the matching phase of the Greenfield Install Flow or the relevant diagnosis section.
+Do not reinstall OpenClaw just because Telegram is not replying. First classify whether OpenClaw itself is missing, gateway is down, model readiness is missing, keepalive is missing, Telegram is unconfigured, or the agent/model turn is slow. Then continue from the matching phase of the Greenfield Install Flow or the relevant diagnosis section.
 
 ## Keepalive Infrastructure
 
@@ -407,6 +418,58 @@ Rules:
 - Verify scope with presence/status checks, not by printing raw config or secrets.
 - If a visibility/permission UI opens, guide the user through the exact choices and close successful setup windows after verification.
 
+## Model Selection And Readiness
+
+Telegram should be configured only after OpenClaw has a working model path. A Telegram bot can receive messages while still failing to answer if model selection, provider auth, quota, local model runtime, or default session routing is not ready.
+
+Treat model readiness as a required setup checkpoint after visibility/permission confirmation and before Telegram token setup. The user-facing explanation can be simple: "Before we connect Telegram, I need to make sure OpenClaw can answer locally."
+
+First discover the current model surface from the installed OpenClaw version. Do not rely on stale command memory. Prefer current CLI help, Control UI, `openclaw doctor`, and status commands:
+
+```bash
+openclaw models --help 2>/dev/null || true
+openclaw models status --plain 2>/dev/null || true
+openclaw infer --help 2>/dev/null || true
+openclaw infer model --help 2>/dev/null || true
+openclaw status 2>/dev/null || true
+```
+
+Classify model state:
+
+1. **Working model already configured**: status/help outputs show a default or selected model, and a local test reply succeeds. Continue to keepalive and Telegram.
+2. **Provider selected but auth missing**: guide the user through local terminal/provider UI auth. Never collect API keys in chat.
+3. **No model selected**: ask the user to choose in natural language, then translate the choice into the supported OpenClaw configuration path.
+4. **Local model requested**: verify the local runtime/model server is installed, running, reachable, and compatible before Telegram.
+5. **Model configured but replies fail**: inspect model auth, quota, rate limits, default session routing, task queue, and recent redacted logs before touching Telegram credentials.
+
+Natural-language model choice examples:
+
+- "Use the OpenAI model I already configured."
+- "Use Claude if my Anthropic login is available."
+- "Use a local model if it is already running."
+- "Use the cheapest reliable cloud model."
+- "Do not enable fallback unless I say so."
+
+Rules:
+
+- Ask the user to choose or confirm the model/provider when no working default is present.
+- Do not ask the user to know provider-specific config keys.
+- Never ask for model API keys, auth profiles, or provider secrets in chat.
+- Use a local terminal prompt, browser/provider auth flow, or OpenClaw-supported secret store for credentials.
+- Do not print raw config, environment variables, auth profiles, or model keys.
+- Do not enable automatic model fallback unless the user explicitly chooses it.
+- Restate the effective model choice in plain language before final verification.
+
+Verification:
+
+- Run one local OpenClaw/model test before Telegram setup. Use the current CLI shape discovered from help output.
+- The test should prove that OpenClaw can produce a simple reply without Telegram.
+- If no direct local infer command exists, use the narrowest supported OpenClaw status/task/session test that proves the model route works.
+- Do not mark model readiness complete just because a provider name is configured.
+- Continue to Telegram only after local model readiness passes or the user explicitly chooses to continue with known model risk.
+
+If Telegram later shows `lastInboundAt` changing but `lastOutboundAt` does not, return to this section before rotating Telegram tokens.
+
 ## Prime Directive
 
 The goal is a working Telegram path, not a tour of every chat provider.
@@ -464,6 +527,7 @@ openclaw --version
 systemctl --user is-active openclaw-gateway.service 2>/dev/null || true
 loginctl show-user "$USER" -p Linger 2>/dev/null || true
 ss -ltnp | grep 18789 || true
+openclaw models status --plain 2>/dev/null || true
 openclaw channels list --json 2>/dev/null || true
 openclaw channels status --json --timeout 30000 2>/dev/null || true
 ```
@@ -547,7 +611,7 @@ Final behavior should be adaptive: use direct access when it works; use proxy on
 
 ## Telegram Setup And Pairing
 
-Configure Telegram only after gateway readiness and background persistence are handled. Use BotFather to create or select a bot, but keep token entry local.
+Configure Telegram only after gateway readiness, visibility/permission scope, model readiness, and background persistence are handled. Use BotFather to create or select a bot, but keep token entry local.
 
 Never ask the user to paste the bot token into chat. If the user offers, stop them and switch to a local terminal prompt or provider UI flow.
 

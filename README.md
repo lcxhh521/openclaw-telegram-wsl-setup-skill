@@ -12,6 +12,7 @@
 - OpenClaw 只装在 Windows 原生环境里，而 gateway 实际需要更稳定的 Linux/WSL 运行环境。
 - `openclaw-gateway.service` 没有启动，或者只是监听端口但没有真正响应。
 - Windows 关机、重启或 WSL 自动休眠后，OpenClaw 没有自动恢复。
+- 模型没有选好、认证没通、额度不够，导致 OpenClaw 本地就不能稳定回复。
 - Telegram bot token 配好了，但 channel 没有启动、没有 pairing、没有权限，或者模型侧没有完成回复。
 - 用户没有明确确认 OpenClaw 可以看到哪些文件、能执行哪些操作。
 
@@ -27,6 +28,8 @@ Windows
   -> Ubuntu
   -> Ubuntu 内安装 OpenClaw
   -> systemd user gateway
+  -> 权限范围确认
+  -> 模型选择与本地回复验证
   -> Windows 登录后的 keepalive/autostart
   -> Telegram Bot
 ```
@@ -41,6 +44,7 @@ Windows
 - 自动判断当前机器处于哪个状态：未装 WSL、Ubuntu 不完整、OpenClaw 缺失、gateway 不通、keepalive 缺失、Telegram 未配置、Telegram 能收到但不回复等。
 - 指导安装或修复 OpenClaw gateway。
 - 将 keepalive 作为基础设施处理，让 OpenClaw 在 Windows 登录后自动恢复。
+- 在接入 Telegram 之前，先选择模型并验证 OpenClaw 本地可以正常回复。
 - 管理安装过程中弹出的终端窗口：需要用户操作的窗口保留，不需要的窗口及时关闭。
 - 安全配置 Telegram bot token，避免用户把 token 粘贴到聊天里。
 - 要求用户用自然语言确认 OpenClaw 的可见范围和权限范围。
@@ -102,9 +106,10 @@ Use $openclaw-telegram-wsl-setup to install OpenClaw Telegram on Windows with WS
 - 不要提交 `~/.openclaw`。
 - 不要提交 Telegram bot token、API key、模型凭据、auth profile。
 - 不要提交原始日志、包含 token 的截图、本机启动脚本或机器专属配置。
-- 不要在聊天里粘贴 bot token；token 应通过本地终端提示或服务商 UI 输入。
+- 不要在聊天里粘贴 bot token、模型 API key 或 auth profile；这些内容应通过本地终端提示或服务商 UI 输入。
 - 在最终验证 Telegram 前，必须让用户确认 OpenClaw 的文件可见范围、工具权限和执行权限。
 - 不要为了让 Telegram 跑通而放宽文件系统边界或执行策略。
+- 不要默认开启模型 fallback，除非用户明确选择。
 - keepalive 是基础设施，应该安静可靠地存在，但不要留下不必要的可见命令行窗口。
 
 ## 维护与发布检查
@@ -127,7 +132,8 @@ Select-String -Path .\openclaw-telegram-wsl-setup\SKILL.md -Pattern 'token|api_k
 
 1. **Ubuntu on WSL2 是推荐默认路径。**
 2. **keepalive/autostart 是 OpenClaw Telegram 稳定运行的基础设施。**
-3. **OpenClaw 的可见范围和权限范围必须由用户确认，且可以用自然语言表达。**
+3. **接入 Telegram 前要先确认 OpenClaw 本地模型可以正常回复。**
+4. **OpenClaw 的可见范围和权限范围必须由用户确认，且可以用自然语言表达。**
 
 后续可以继续改进的方向包括：
 
