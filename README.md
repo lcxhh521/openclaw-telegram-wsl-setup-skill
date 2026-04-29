@@ -13,6 +13,7 @@
 - `openclaw-gateway.service` 没有启动，或者只是监听端口但没有真正响应。
 - Windows 关机、重启或 WSL 自动休眠后，OpenClaw 没有自动恢复。
 - 电脑长时间断网后，OpenClaw 进程还活着，但 Telegram polling、provider socket 或 HTTP transport 进入半死状态，恢复网络后仍然不行动。
+- 网络或代理短暂抖动后，过于敏感的 watchdog 反复重启 gateway，导致 Telegram 能回复但明显延迟。
 - 模型没有选好、认证没通、额度不够，导致 OpenClaw 本地就不能稳定回复。
 - Telegram bot token 配好了，但 channel 没有启动、没有 pairing、没有权限，或者模型侧没有完成回复。
 - 用户没有明确确认 OpenClaw 可以看到哪些文件、能执行哪些操作。
@@ -46,7 +47,9 @@ Windows
 - 自动判断当前机器处于哪个状态：未装 WSL、Ubuntu 不完整、OpenClaw 缺失、gateway 不通、keepalive 缺失、Telegram 未配置、Telegram 能收到但不回复等。
 - 指导安装或修复 OpenClaw gateway。
 - 将 keepalive 作为基础设施处理，让 OpenClaw 在 Windows 登录后自动恢复。
-- 将长时间断网恢复作为基础设施处理：断网期间不反复重启，网络从 offline 变回 online 时自动重建 gateway，清理 stale socket / polling stall。
+- 将长时间断网恢复作为基础设施处理：连续失败后才确认 offline，网络从确认 offline 变回 online 时自动重建 gateway，清理 stale socket / polling stall。
+- 为 network recovery watchdog 加防抖和冷却：单次网络探测失败或单次 gateway 探测失败只记录，不立刻重启，避免 watchdog 自己制造回复延迟。
+- 在 watchdog 内用本地 HTTP 仪表盘端口检查 gateway 健康，不在 systemd timer 环境里调用 `openclaw gateway probe`，避免 CLI 环境差异造成误判。
 - 在接入 Telegram 之前，先选择模型并验证 OpenClaw 本地可以正常回复。
 - 管理安装过程中弹出的终端窗口：需要用户操作的窗口保留，不需要的窗口及时关闭。
 - 安全配置 Telegram bot token，避免用户把 token 粘贴到聊天里。
@@ -114,7 +117,7 @@ Use $openclaw-telegram-wsl-setup to install OpenClaw Telegram on Windows with WS
 - 不要为了让 Telegram 跑通而放宽文件系统边界或执行策略。
 - 不要默认开启模型 fallback，除非用户明确选择。
 - keepalive 是基础设施，应该安静可靠地存在，但不要留下不必要的可见命令行窗口。
-- network recovery watchdog 是断网恢复基础设施，只应记录状态并在网络恢复时重启 gateway 一次，不应提交本机日志或机器专属状态文件。
+- network recovery watchdog 是断网恢复基础设施，只应记录状态并在确认网络恢复时重启 gateway 一次；它必须带防抖和冷却，不应因为一次短暂探测失败反复重启，也不应提交本机日志或机器专属状态文件。
 
 ## 维护与发布检查
 
@@ -136,7 +139,7 @@ Select-String -Path .\openclaw-telegram-wsl-setup\SKILL.md -Pattern 'token|api_k
 
 1. **Ubuntu on WSL2 是推荐默认路径。**
 2. **keepalive/autostart 是 OpenClaw Telegram 稳定运行的基础设施。**
-3. **长时间断网恢复要作为基础设施处理，避免网络恢复后 stale socket / polling stall 影响行动。**
+3. **长时间断网恢复要作为基础设施处理，避免网络恢复后 stale socket / polling stall 影响行动；watchdog 必须防抖，避免误重启造成 Telegram 延迟。**
 4. **接入 Telegram 前要先确认 OpenClaw 本地模型可以正常回复。**
 5. **OpenClaw 的可见范围和权限范围必须由用户确认，且可以用自然语言表达。**
 
