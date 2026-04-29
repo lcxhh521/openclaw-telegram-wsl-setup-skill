@@ -1,6 +1,6 @@
-﻿---
+---
 name: openclaw-telegram-wsl-setup
-description: "Set up and repair OpenClaw's Telegram channel on Windows through WSL2. Use when the user wants OpenClaw to reply through Telegram, asks how OpenClaw was installed or should be kept running in WSL, needs WSL/OpenClaw/gateway readiness checks, gateway keepalive/autostart repair, safe Telegram bot token entry, proxy-aware Telegram connectivity, pairing approval, channel startup verification, or diagnosis of Telegram messages that are not received, not answered, answered only after a long delay, or only work while WSL is awake."
+description: "Set up and repair OpenClaw's Telegram channel on Windows through WSL2. Use when the user wants OpenClaw to reply through Telegram, asks how OpenClaw was installed or should be kept running in WSL, needs WSL/OpenClaw/gateway readiness checks, gateway keepalive/autostart repair, long-offline network recovery, stale socket or polling recovery after internet loss, safe Telegram bot token entry, proxy-aware Telegram connectivity, pairing approval, channel startup verification, or diagnosis of Telegram messages that are not received, not answered, answered only after a long delay, or only work while WSL is awake."
 ---
 
 # OpenClaw Telegram WSL Setup
@@ -608,6 +608,109 @@ no_proxy=127.0.0.1,localhost,::1
 ```
 
 Final behavior should be adaptive: use direct access when it works; use proxy only when needed and verified. If gateway listens but self-access fails, inspect `NO_PROXY` before changing Telegram credentials.
+
+## Long Offline Recovery
+
+Use this section when the machine stays on but internet access is disabled for a long time, then OpenClaw or Telegram does not resume cleanly after the network returns. This is an infrastructure recovery problem, not a token/model reset problem.
+
+Important distinction:
+
+- `Restart=always` only restarts `openclaw-gateway.service` after the process exits.
+- It does not repair a process that is still alive while Telegram polling, HTTP transport, or provider sockets are stale after a long network outage.
+- Do not rotate Telegram tokens, re-run pairing, or change models before checking for stale polling/network recovery symptoms.
+
+Recognize the pattern:
+
+```text
+Polling stall detected
+Network request for 'getUpdates' failed
+stale-socket
+channel stop timed out
+```
+
+If these appear after a long offline period and `openclaw status` still shows the gateway service as running, add or verify a network-recovery watchdog. The preferred behavior is:
+
+1. Check network reachability on a short interval.
+2. While offline, only record `offline`; do not repeatedly restart OpenClaw.
+3. When state changes from `offline` to `online`, restart `openclaw-gateway.service` once.
+4. Use a cooldown so the gateway is not restarted in a loop.
+
+Recommended user-level systemd design:
+
+- Script: `~/.local/bin/openclaw-netwatch`
+- Service: `~/.config/systemd/user/openclaw-netwatch.service`
+- Timer: `~/.config/systemd/user/openclaw-netwatch.timer`
+- Interval: 60 seconds
+- Cooldown: at least 180 seconds
+- Probe: `curl -fsS --connect-timeout 4 --max-time 8 https://api.telegram.org`
+- Preserve proxy environment when the gateway already uses one.
+- Preserve `NO_PROXY=127.0.0.1,localhost,::1`.
+
+Minimal script shape:
+
+```bash
+#!/usr/bin/env bash
+set -u
+
+STATE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/openclaw-netwatch"
+STATE_FILE="$STATE_DIR/state"
+LOG_FILE="$STATE_DIR/watchdog.log"
+LOCK_FILE="$STATE_DIR/lock"
+COOLDOWN_SECONDS=180
+
+mkdir -p "$STATE_DIR"
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+previous="unknown"
+last_restart=0
+if [[ -r "$STATE_FILE" ]]; then
+  . "$STATE_FILE" 2>/dev/null || true
+fi
+
+now="$(date +%s)"
+
+is_online() {
+  curl -fsS --connect-timeout 4 --max-time 8 https://api.telegram.org >/dev/null 2>&1
+}
+
+if is_online; then
+  if [[ "$previous" != "online" ]] && (( now - last_restart >= COOLDOWN_SECONDS )); then
+    printf '%s network restored; restarting openclaw-gateway.service\n' "$(date -Is)" >> "$LOG_FILE"
+    systemctl --user restart openclaw-gateway.service
+    last_restart="$now"
+  fi
+  printf 'previous=%q\nlast_restart=%q\n' "online" "$last_restart" > "$STATE_FILE"
+else
+  printf 'previous=%q\nlast_restart=%q\n' "offline" "$last_restart" > "$STATE_FILE"
+fi
+```
+
+After installing the timer, verify:
+
+```bash
+chmod +x ~/.local/bin/openclaw-netwatch
+systemctl --user daemon-reload
+systemctl --user enable --now openclaw-netwatch.timer
+systemctl --user status openclaw-netwatch.timer --no-pager
+tail -n 20 ~/.cache/openclaw-netwatch/watchdog.log
+openclaw status --json
+```
+
+Expected result after initialization:
+
+- The first run may restart the gateway once if the previous state is unknown.
+- Subsequent online checks should not keep restarting.
+- After gateway restart, wait 60-120 seconds before judging Telegram readiness.
+- `openclaw status` should return `gateway.reachable=true` after startup settles.
+
+If a user's outage pattern is Windows network interface up/down rather than proxy reachability, consider a Windows Task Scheduler trigger that runs this WSL restart on network reconnect:
+
+```powershell
+wsl -d Ubuntu -- bash -lc 'systemctl --user restart openclaw-gateway.service'
+```
+
+Prefer the WSL timer when the user wants continuous recovery without configuring Windows event triggers.
 
 ## Telegram Setup And Pairing
 
