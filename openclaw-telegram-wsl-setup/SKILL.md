@@ -635,7 +635,7 @@ If these appear after a long offline period and `openclaw status` still shows th
 3. While offline, only record `offline`; do not repeatedly restart OpenClaw.
 4. When state changes from confirmed `offline` to `online`, restart `openclaw-gateway.service` once.
 5. Use a cooldown so the gateway is not restarted in a loop.
-6. While online, optionally check local gateway health with a simple HTTP request to the dashboard endpoint. Do not use `openclaw gateway probe` inside the systemd watchdog; it can fail under a different user-service environment and create false restarts. Use `openclaw gateway probe` only as an interactive verification command outside the timer.
+6. While online, optionally check local gateway health with a simple HTTP request to the dashboard endpoint, but never during the gateway startup grace period. Do not use `openclaw gateway probe` inside the systemd watchdog; it can fail under a different user-service environment and create false restarts. Use `openclaw gateway probe` only as an interactive verification command outside the timer.
 
 Recommended user-level systemd design:
 
@@ -647,6 +647,7 @@ Recommended user-level systemd design:
 - Network probe: `curl -fsS --connect-timeout 4 --max-time 8 https://api.telegram.org`
 - Gateway health probe: `curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18789/`
 - Confirm counts: at least 2 consecutive failures before declaring network offline or gateway unhealthy.
+- Gateway startup grace: at least 240 seconds after `openclaw-gateway.service` starts. During this grace period, skip gateway health restarts because OpenClaw may be staging bundled runtime dependencies or starting channels/sidecars.
 - Preserve proxy environment when the gateway already uses one.
 - Preserve `NO_PROXY=127.0.0.1,localhost,::1`.
 - If generating the script from Windows or PowerShell, ensure the final file has Linux LF line endings. Mixed CRLF/LF line endings can make systemd report `unexpected end of file`.
@@ -664,6 +665,7 @@ LOCK_FILE="$STATE_DIR/lock"
 COOLDOWN_SECONDS=300
 OFFLINE_CONFIRM_COUNT=2
 GATEWAY_FAIL_CONFIRM_COUNT=2
+GATEWAY_STARTUP_GRACE_SECONDS=240
 
 mkdir -p "$STATE_DIR"
 exec 9>"$LOCK_FILE"
@@ -694,6 +696,23 @@ is_online() {
 
 gateway_healthy() {
   curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18789/ >/dev/null 2>&1
+}
+
+gateway_service_age_seconds() {
+  local started=""
+  started="$(systemctl --user show openclaw-gateway.service -p ActiveEnterTimestamp --value 2>/dev/null || true)"
+  [[ -n "$started" && "$started" != "n/a" ]] || return 1
+  local started_epoch=""
+  started_epoch="$(date -d "$started" +%s 2>/dev/null || true)"
+  [[ -n "$started_epoch" ]] || return 1
+  printf '%s\n' "$((now - started_epoch))"
+}
+
+within_gateway_startup_grace() {
+  local age=""
+  age="$(gateway_service_age_seconds 2>/dev/null || true)"
+  [[ -n "$age" ]] || return 1
+  (( age < GATEWAY_STARTUP_GRACE_SECONDS ))
 }
 
 restart_gateway() {
@@ -728,7 +747,9 @@ if is_online; then
 
   offline_count=0
 
-  if gateway_healthy; then
+  if within_gateway_startup_grace; then
+    gateway_fail_count=0
+  elif gateway_healthy; then
     gateway_fail_count=0
   else
     gateway_fail_count=$((gateway_fail_count + 1))
@@ -770,6 +791,7 @@ Expected result after initialization:
 - The first run may restart the gateway once if the previous state is unknown.
 - Subsequent online checks should not keep restarting.
 - One failed network or gateway probe should log "waiting for confirmation" and should not restart the gateway.
+- During the gateway startup grace period, the watchdog should not restart gateway for HTTP probe failures. This prevents false restarts while OpenClaw installs bundled runtime deps or starts Telegram sidecars.
 - If gateway appears slow from Telegram but `openclaw gateway probe` is fast interactively, do not immediately restart; inspect watchdog logs first for false-positive restarts.
 - After gateway restart, wait 60-120 seconds before judging Telegram readiness.
 - `openclaw status` should return `gateway.reachable=true` after startup settles.
