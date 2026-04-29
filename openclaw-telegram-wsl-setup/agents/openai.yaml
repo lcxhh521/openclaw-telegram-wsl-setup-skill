@@ -1,7 +1,7 @@
 interface:
   display_name: "OpenClaw Telegram WSL Setup"
-  short_description: "Install and repair OpenClaw Telegram on Windows through WSL2."
-  default_prompt: "Use $openclaw-telegram-wsl-setup to install or repair OpenClaw Telegram on Windows with Ubuntu on WSL2."
+  short_description: "Install, repair, and harden OpenClaw Telegram on Windows through WSL2."
+  default_prompt: "Use $openclaw-telegram-wsl-setup to install, repair, or harden OpenClaw Telegram on Windows with Ubuntu on WSL2, including long-offline recovery."
 
 policy:
   allow_implicit_invocation: true
