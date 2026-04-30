@@ -188,6 +188,10 @@ namespace OpenClawLocalMonitor
 
         Label updated;
         Label statusLine;
+        Label tokenHeader;
+        Label taskHeader;
+        Label sessionHeader;
+        Label logHeader;
         Button refreshButton;
         Card overall;
         Card gateway;
@@ -217,7 +221,7 @@ namespace OpenClawLocalMonitor
         {
             Text = "OpenClaw 监控面板";
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(1120, 940);
+            MinimumSize = new Size(1000, 760);
             ClientSize = new Size(1220, 900);
             AutoScroll = true;
             BackColor = Color.FromArgb(246, 248, 252);
@@ -227,6 +231,7 @@ namespace OpenClawLocalMonitor
             if (File.Exists(iconPath)) Icon = new Icon(iconPath);
 
             BuildUi();
+            Resize += (s, e) => LayoutUi();
             SetupTray();
             closePreference = LoadClosePreference();
             timer.Interval = 12000;
@@ -455,6 +460,125 @@ namespace OpenClawLocalMonitor
             Controls.Add(statusLine);
             legendLine = MakeLabel("绿色=就绪，蓝色=正在工作，黄色=需要留意，红色=需要处理。", 28, 874, 1154, 22, 8.5f, Color.FromArgb(148, 163, 184), false);
             Controls.Add(legendLine);
+            LayoutUi();
+        }
+
+        void LayoutUi()
+        {
+            if (refreshButton == null || taskGrid == null) return;
+            SuspendLayout();
+            try
+            {
+                const int margin = 28;
+                const int gap = 16;
+                var contentWidth = Math.Max(900, ClientSize.Width - margin * 2);
+                var clientHeight = Math.Max(680, ClientSize.Height);
+
+                refreshButton.SetBounds(margin + contentWidth - 92, 20, 92, 36);
+                updated.SetBounds(Math.Max(margin, margin + contentWidth - 340), 28, 230, 24);
+
+                var hero = Controls.OfType<RoundedPanel>().FirstOrDefault(p => p.Controls.Contains(heroTitle));
+                if (hero != null)
+                {
+                    hero.SetBounds(margin, 92, contentWidth, 118);
+                    heroTitle.SetBounds(28, 18, Math.Max(420, contentWidth - 56), 38);
+                    heroDetail.SetBounds(30, 60, Math.Max(420, contentWidth - 60), 44);
+                }
+
+                var topCards = new[] { overall, gateway, telegram, tasks, audit, session };
+                var topColumns = 6;
+                var topCardWidth = (contentWidth - gap * (topColumns - 1)) / topColumns;
+                var y = 232;
+                for (var i = 0; i < topCards.Length; i++)
+                {
+                    var row = i / topColumns;
+                    var col = i % topColumns;
+                    topCards[i].SetBounds(margin + col * (topCardWidth + gap), y + row * 104, topCardWidth, 88);
+                }
+                y += ((topCards.Length + topColumns - 1) / topColumns) * 104 + 8;
+
+                MoveDirectLabelFromOriginalY(344, margin, y, 260, 24);
+                y += 32;
+                var tokenCards = new[] { tokenTotal, tokenInput, tokenOutput, tokenCache, tokenCost };
+                if (contentWidth >= 1120)
+                {
+                    var tokenListWidth = 386;
+                    var tokenCardWidth = (contentWidth - tokenListWidth - gap * 5) / 5;
+                    for (var i = 0; i < tokenCards.Length; i++)
+                        tokenCards[i].SetBounds(margin + i * (tokenCardWidth + gap), y, tokenCardWidth, 84);
+                    tokenList.SetBounds(margin + 5 * (tokenCardWidth + gap), y, tokenListWidth, 84);
+                    y += 110;
+                }
+                else
+                {
+                    var tokenCardWidth = (contentWidth - 12 * 4) / 5;
+                    for (var i = 0; i < tokenCards.Length; i++)
+                        tokenCards[i].SetBounds(margin + i * (tokenCardWidth + 12), y, tokenCardWidth, 84);
+                    tokenList.SetBounds(margin, y + 100, contentWidth, 88);
+                    y += 214;
+                }
+
+                if (costHintPopup != null)
+                {
+                    var hintWidth = Math.Min(530, contentWidth);
+                    costHintPopup.SetBounds(Math.Min(tokenCost.Panel.Left, margin + contentWidth - hintWidth), tokenCost.Panel.Bottom + 8, hintWidth, 56);
+                }
+
+                MoveDirectLabelFromOriginalY(486, margin, y, 260, 24);
+                y += 30;
+                var lowerArea = 178;
+                var bottomArea = 58;
+                var gridHeight = Math.Max(130, Math.Min(260, clientHeight - y - lowerArea - bottomArea));
+                taskGrid.SetBounds(margin, y, contentWidth, gridHeight);
+                y += gridHeight + 34;
+
+                var halfWidth = (contentWidth - gap) / 2;
+                MoveDirectLabelFromOriginalY(692, margin, y, halfWidth, 24);
+                MoveDirectLabelFromOriginalX(622, margin + halfWidth + gap, y, halfWidth, 24);
+                sessionList.SetBounds(margin, y + 30, halfWidth, 120);
+                logList.SetBounds(margin + halfWidth + gap, y + 30, halfWidth, 120);
+                y += 164;
+
+                statusLine.SetBounds(margin, y, contentWidth, 24);
+                legendLine.SetBounds(margin, y + 22, contentWidth, 22);
+                AutoScrollMinSize = new Size(margin * 2 + contentWidth, y + 58);
+            }
+            finally
+            {
+                ResumeLayout();
+            }
+        }
+
+        void MoveDirectLabelFromOriginalY(int originalY, int x, int y, int w, int h)
+        {
+            Label label = null;
+            if (originalY == 344)
+            {
+                if (tokenHeader == null) tokenHeader = Controls.OfType<Label>().FirstOrDefault(l => l.Location.Y == originalY);
+                label = tokenHeader;
+            }
+            else if (originalY == 486)
+            {
+                if (taskHeader == null) taskHeader = Controls.OfType<Label>().FirstOrDefault(l => l.Location.Y == originalY);
+                label = taskHeader;
+            }
+            else if (originalY == 692)
+            {
+                if (sessionHeader == null) sessionHeader = Controls.OfType<Label>().FirstOrDefault(l => l.Location.Y == originalY && l.Location.X < 100);
+                label = sessionHeader;
+            }
+            else
+            {
+                label = Controls.OfType<Label>().FirstOrDefault(l => l.Location.Y == originalY);
+            }
+            if (label != null) label.SetBounds(x, y, w, h);
+        }
+
+        void MoveDirectLabelFromOriginalX(int originalX, int x, int y, int w, int h)
+        {
+            if (logHeader == null) logHeader = Controls.OfType<Label>().FirstOrDefault(l => l.Location.X == originalX && l != updated);
+            var label = logHeader;
+            if (label != null) label.SetBounds(x, y, w, h);
         }
 
         ListBox MakeList(int x, int y, int w, int h)
@@ -1315,6 +1439,7 @@ namespace OpenClawLocalMonitor
     {
         public RoundedPanel Panel { get; private set; }
         public Label Value { get; private set; }
+        readonly Label titleLabel;
 
         public Card(string title, int x, int y, int w, int h)
         {
@@ -1326,7 +1451,7 @@ namespace OpenClawLocalMonitor
                 BorderColor = Color.FromArgb(226, 232, 240),
                 Radius = 16
             };
-            var titleLabel = new Label
+            titleLabel = new Label
             {
                 Text = title,
                 Location = new Point(12, 10),
@@ -1346,6 +1471,13 @@ namespace OpenClawLocalMonitor
             };
             Panel.Controls.Add(titleLabel);
             Panel.Controls.Add(Value);
+        }
+
+        public void SetBounds(int x, int y, int w, int h)
+        {
+            Panel.SetBounds(x, y, w, h);
+            titleLabel.SetBounds(12, 10, Math.Max(20, w - 24), 22);
+            Value.SetBounds(12, 38, Math.Max(20, w - 24), Math.Max(20, h - 44));
         }
     }
 
