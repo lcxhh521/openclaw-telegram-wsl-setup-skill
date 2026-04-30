@@ -33,6 +33,99 @@ namespace OpenClawLocalMonitor
         public string Error = "";
     }
 
+    enum ClosePreference
+    {
+        Ask,
+        MinimizeToTray,
+        Exit
+    }
+
+    sealed class CloseChoice
+    {
+        public bool Cancelled = true;
+        public ClosePreference Preference = ClosePreference.MinimizeToTray;
+        public bool Remember;
+    }
+
+    sealed class CloseChoiceDialog : Form
+    {
+        readonly CheckBox remember;
+        public CloseChoice Choice = new CloseChoice();
+
+        public CloseChoiceDialog(Icon icon)
+        {
+            Text = "关闭 OpenClaw 监控面板";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ClientSize = new Size(420, 190);
+            BackColor = Color.White;
+            ForeColor = Color.FromArgb(31, 41, 55);
+            Font = new Font("Microsoft YaHei UI", 9f);
+            if (icon != null) Icon = icon;
+
+            var title = new Label
+            {
+                Text = "你想怎么处理监控面板？",
+                Left = 22,
+                Top = 18,
+                Width = 360,
+                Height = 26,
+                Font = new Font(Font.FontFamily, 12f, FontStyle.Bold)
+            };
+            var body = new Label
+            {
+                Text = "最小化按钮会保留在任务栏。点击右上角 X 时，你可以选择让它继续在托盘后台运行，或彻底关闭程序。",
+                Left = 22,
+                Top = 52,
+                Width = 370,
+                Height = 48
+            };
+            remember = new CheckBox
+            {
+                Text = "以后都按这个选择处理",
+                Left = 22,
+                Top = 106,
+                Width = 220,
+                Height = 24
+            };
+
+            var trayButton = MakeDialogButton("最小化到托盘", 22, 144, 130);
+            trayButton.Click += (s, e) => Choose(ClosePreference.MinimizeToTray);
+            var exitButton = MakeDialogButton("关闭程序", 160, 144, 110);
+            exitButton.Click += (s, e) => Choose(ClosePreference.Exit);
+            var cancelButton = MakeDialogButton("取消", 282, 144, 90);
+            cancelButton.Click += (s, e) => { Choice.Cancelled = true; DialogResult = DialogResult.Cancel; Close(); };
+
+            Controls.AddRange(new Control[] { title, body, remember, trayButton, exitButton, cancelButton });
+            AcceptButton = trayButton;
+            CancelButton = cancelButton;
+        }
+
+        static Button MakeDialogButton(string text, int left, int top, int width)
+        {
+            return new Button
+            {
+                Text = text,
+                Left = left,
+                Top = top,
+                Width = width,
+                Height = 32,
+                FlatStyle = FlatStyle.System
+            };
+        }
+
+        void Choose(ClosePreference preference)
+        {
+            Choice.Cancelled = false;
+            Choice.Preference = preference;
+            Choice.Remember = remember.Checked;
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+    }
+
     sealed class Snapshot
     {
         public DateTime GeneratedAt = DateTime.Now;
@@ -84,6 +177,7 @@ namespace OpenClawLocalMonitor
         readonly object costLock = new object();
         CostSummary cachedCost = new CostSummary();
         bool refreshing;
+        ClosePreference closePreference = ClosePreference.Ask;
 
         Label updated;
         Label statusLine;
@@ -127,22 +221,93 @@ namespace OpenClawLocalMonitor
 
             BuildUi();
             SetupTray();
+            closePreference = LoadClosePreference();
             timer.Interval = 12000;
             timer.Tick += async (s, e) => await RefreshAsync();
             timer.Start();
             Shown += async (s, e) => await RefreshAsync();
-            Resize += (s, e) =>
+            FormClosing += OnFormClosing;
+        }
+
+        void OnFormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (allowExit)
             {
-                if (WindowState == FormWindowState.Minimized) HideToTray();
-            };
-            FormClosing += (s, e) =>
+                if (trayIcon != null) trayIcon.Visible = false;
+                return;
+            }
+
+            var preference = closePreference;
+            if (preference == ClosePreference.Ask)
             {
-                if (!allowExit)
+                using (var dialog = new CloseChoiceDialog(Icon))
                 {
-                    e.Cancel = true;
-                    HideToTray();
+                    dialog.ShowDialog(this);
+                    if (dialog.Choice.Cancelled)
+                    {
+                        e.Cancel = true;
+                        return;
+                    }
+                    preference = dialog.Choice.Preference;
+                    if (dialog.Choice.Remember)
+                    {
+                        closePreference = preference;
+                        SaveClosePreference(preference);
+                    }
                 }
-            };
+            }
+
+            if (preference == ClosePreference.MinimizeToTray)
+            {
+                e.Cancel = true;
+                HideToTray();
+                return;
+            }
+
+            allowExit = true;
+            if (trayIcon != null) trayIcon.Visible = false;
+        }
+
+        ClosePreference LoadClosePreference()
+        {
+            try
+            {
+                var path = SettingsPath();
+                if (!File.Exists(path)) return ClosePreference.Ask;
+                var data = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+                object value;
+                if (!data.TryGetValue("closePreference", out value)) return ClosePreference.Ask;
+                var text = Convert.ToString(value);
+                if (text == "tray") return ClosePreference.MinimizeToTray;
+                if (text == "exit") return ClosePreference.Exit;
+            }
+            catch
+            {
+            }
+            return ClosePreference.Ask;
+        }
+
+        void SaveClosePreference(ClosePreference preference)
+        {
+            try
+            {
+                var path = SettingsPath();
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                var text = preference == ClosePreference.MinimizeToTray ? "tray" : preference == ClosePreference.Exit ? "exit" : "ask";
+                var data = new Dictionary<string, string> { { "closePreference", text } };
+                File.WriteAllText(path, json.Serialize(data), Encoding.UTF8);
+            }
+            catch
+            {
+            }
+        }
+
+        static string SettingsPath()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "OpenClawMonitor",
+                "settings.json");
         }
 
         void SetupTray()
