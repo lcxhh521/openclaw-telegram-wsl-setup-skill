@@ -209,7 +209,6 @@ namespace OpenClawLocalMonitor
         Label heroDetail;
         Label legendLine;
         DataGridView taskGrid;
-        ListBox tokenList;
         ListBox sessionList;
         ListBox logList;
         NotifyIcon trayIcon;
@@ -417,8 +416,6 @@ namespace OpenClawLocalMonitor
             tokenCost = new Card("已记录成本", 652, 376, 128, 84);
             Controls.AddRange(new Control[] { tokenTotal.Panel, tokenInput.Panel, tokenOutput.Panel, tokenCache.Panel, tokenCost.Panel });
             AddCostHint();
-            tokenList = MakeList(796, 376, 386, 84);
-            Controls.Add(tokenList);
 
             Controls.Add(MakeLabel("现在在做什么", 28, 486, 260, 24, 12f, Color.FromArgb(15, 23, 42), true));
             taskGrid = new DataGridView
@@ -500,23 +497,11 @@ namespace OpenClawLocalMonitor
                 MoveDirectLabelFromOriginalY(344, margin, y, 260, 24);
                 y += 32;
                 var tokenCards = new[] { tokenTotal, tokenInput, tokenOutput, tokenCache, tokenCost };
-                if (contentWidth >= 1120)
-                {
-                    var tokenListWidth = 386;
-                    var tokenCardWidth = (contentWidth - tokenListWidth - gap * 5) / 5;
-                    for (var i = 0; i < tokenCards.Length; i++)
-                        tokenCards[i].SetBounds(margin + i * (tokenCardWidth + gap), y, tokenCardWidth, 84);
-                    tokenList.SetBounds(margin + 5 * (tokenCardWidth + gap), y, tokenListWidth, 84);
-                    y += 110;
-                }
-                else
-                {
-                    var tokenCardWidth = (contentWidth - 12 * 4) / 5;
-                    for (var i = 0; i < tokenCards.Length; i++)
-                        tokenCards[i].SetBounds(margin + i * (tokenCardWidth + 12), y, tokenCardWidth, 84);
-                    tokenList.SetBounds(margin, y + 100, contentWidth, 88);
-                    y += 214;
-                }
+                var tokenGap = contentWidth >= 1120 ? gap : 12;
+                var tokenCardWidth = (contentWidth - tokenGap * (tokenCards.Length - 1)) / tokenCards.Length;
+                for (var i = 0; i < tokenCards.Length; i++)
+                    tokenCards[i].SetBounds(margin + i * (tokenCardWidth + tokenGap), y, tokenCardWidth, 84);
+                y += 110;
 
                 if (costHintPopup != null)
                 {
@@ -1176,10 +1161,6 @@ namespace OpenClawLocalMonitor
             SetCard(tokenCache, s.TokenCacheRead > 0 ? "good" : "warn");
             tokenCost.Value.Text = s.CostText;
             SetCard(tokenCost, s.CostState);
-
-            tokenList.Items.Clear();
-            foreach (var row in s.TokenFlows) tokenList.Items.Add(row);
-            if (s.TokenFlows.Count == 0) tokenList.Items.Add("暂时没有可用的 Token 会话快照。");
 
             taskGrid.Rows.Clear();
             foreach (var row in s.Tasks) taskGrid.Rows.Add(row);
