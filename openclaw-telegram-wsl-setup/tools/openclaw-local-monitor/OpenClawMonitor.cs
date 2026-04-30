@@ -1035,7 +1035,13 @@ namespace OpenClawLocalMonitor
             var script =
                 "cd \"$HOME/.openclaw/workspace\" 2>/dev/null || exit 0\n" +
                 "pidfile=\"memory/continuous-task-status/steinsgate-kurisu.pid\"\n" +
-                "if [ -f \"$pidfile\" ]; then pid=$(tr -dc '0-9' < \"$pidfile\" 2>/dev/null); if [ -n \"$pid\" ] && ps -p \"$pid\" >/dev/null 2>&1; then args=$(ps -p \"$pid\" -o args= 2>/dev/null | cut -c1-160); echo \"DAEMON\t$pid\t$args\"; fi; fi\n" +
+                "seen=' '\n" +
+                "emit_proc() { role=\"$1\"; pid=\"$2\"; [ -n \"$pid\" ] || return; case \"$seen\" in *\" $pid \"*) return;; esac; seen=\"$seen$pid \"; etime=$(ps -p \"$pid\" -o etime= 2>/dev/null | awk '{$1=$1;print}'); args=$(ps -p \"$pid\" -o args= 2>/dev/null | cut -c1-160); [ -n \"$args\" ] && echo \"LOCALPROC\t$role\t$pid\t$etime\t$args\"; }\n" +
+                "if [ -f \"$pidfile\" ]; then pid=$(tr -dc '0-9' < \"$pidfile\" 2>/dev/null); if [ -n \"$pid\" ] && ps -p \"$pid\" >/dev/null 2>&1; then emit_proc \"学习 daemon\" \"$pid\"; fi; fi\n" +
+                "for pid in $(ps -eo pid=,args= | awk '/continuous_learning_daemon\\.py/ && !/awk/ {print $1}'); do emit_proc \"学习 daemon\" \"$pid\"; done\n" +
+                "for pid in $(ps -eo pid=,args= | awk '/steinsgate_visible_supervisor\\.py/ && !/awk/ {print $1}'); do emit_proc \"可见 supervisor\" \"$pid\"; done\n" +
+                "svc=$(systemctl --user is-active openclaw-netwatch.service 2>/dev/null || true); [ \"$svc\" = \"active\" ] && echo \"SERVICE\tOpenClaw 网络 watchdog\tactive\topenclaw-netwatch.service\"\n" +
+                "watchlog=\"memory/continuous-task-status/steinsgate-kurisu-watchdog.log\"; [ -f \"$watchlog\" ] && printf 'WATCHDOG\\t%s\\t%s\\n' \"$(stat -c '%Y' \"$watchlog\" 2>/dev/null)\" \"$(tail -1 \"$watchlog\" 2>/dev/null | cut -c1-160)\"\n" +
                 "find steinsgate memory/continuous-task-status -maxdepth 1 -type f \\( -name 'material_coverage_rotation*.md' -o -name 'material_coverage_rotation*.json' -o -name 'learning_synthesis_visible*.md' -o -name 'learning_synthesis_visible*.json' -o -name 'audio_performance_aux_notes_batch*.md' -o -name 'audio_performance_aux_notes_batch*.json' -o -name 'steinsgate-kurisu.json' \\) -mmin -120 -printf 'ARTIFACT\\t%T@\\t%p\\n' 2>/dev/null | sort -k2,2nr | head -12\n";
             var result = RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", script }, 15000);
             return Tuple.Create(result.Ok, result.Stdout, result.Stderr + result.Error);
@@ -1050,7 +1056,7 @@ namespace OpenClawLocalMonitor
             var currentArtifacts = new Dictionary<string, long>();
             foreach (var line in data.Item2.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
-                var parts = line.Split(new[] { '\t' }, 3);
+                var parts = line.Split(new[] { '\t' });
                 if (parts.Length >= 2 && parts[0] == "DAEMON")
                 {
                     s.LocalDaemonActive = true;
@@ -1058,6 +1064,39 @@ namespace OpenClawLocalMonitor
                     var pid = parts[1];
                     var detail = parts.Length >= 3 ? Trim(parts[2], 70) : "";
                     s.Tasks.Add(new[] { "本地学习 daemon", "本地进程", "运行中", "-", "PID " + pid + (string.IsNullOrWhiteSpace(detail) ? "" : " · " + detail) });
+                    continue;
+                }
+
+                if (parts.Length >= 5 && parts[0] == "LOCALPROC")
+                {
+                    s.LocalDaemonActive = true;
+                    s.LocalWorkItems = Math.Max(s.LocalWorkItems, 1);
+                    var role = parts[1];
+                    var pid = parts[2];
+                    var etime = parts[3];
+                    var detail = Trim(parts[4], 70);
+                    s.Tasks.Add(new[] { "本地" + role, "OS 进程", "运行中", string.IsNullOrWhiteSpace(etime) ? "-" : etime, "PID " + pid + (string.IsNullOrWhiteSpace(detail) ? "" : " · " + detail) });
+                    continue;
+                }
+
+                if (parts.Length >= 4 && parts[0] == "SERVICE")
+                {
+                    s.LocalDaemonActive = true;
+                    s.LocalWorkItems = Math.Max(s.LocalWorkItems, 1);
+                    s.Tasks.Add(new[] { parts[1], "systemd 服务", "运行中", "-", parts[3] });
+                    continue;
+                }
+
+                if (parts.Length >= 3 && parts[0] == "WATCHDOG")
+                {
+                    double seconds = 0;
+                    if (double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out seconds))
+                    {
+                        var watchdogMs = (long)(seconds * 1000);
+                        var text = "watchdog 最近检查 " + AgeSince(watchdogMs);
+                        if (!string.IsNullOrWhiteSpace(parts[2])) text += " · " + Trim(parts[2], 80);
+                        s.StatusLine = string.IsNullOrWhiteSpace(s.StatusLine) ? text : s.StatusLine + " | " + text;
+                    }
                     continue;
                 }
 
