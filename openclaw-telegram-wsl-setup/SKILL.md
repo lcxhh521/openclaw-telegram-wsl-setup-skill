@@ -919,6 +919,7 @@ For key handling:
 - Reuse the existing Volcengine key only if it is already saved locally.
 - If a key is missing, open a local terminal prompt. Do not ask the user to paste it into chat.
 - Prefer `VOLCANO_ENGINE_API_KEY` for OpenClaw's Volcengine provider compatibility, and allow ASR-specific aliases such as `VOLCENGINE_ASR_API_KEY`.
+- If the Volcengine speech-service page provides `APP ID` and `Access Token`, save them locally with `tools/openclaw-doubao-asr/Set-DoubaoAsrCredentials.ps1`; the helper will prefer `VOLCENGINE_ASR_APP_KEY + VOLCENGINE_ASR_ACCESS_KEY` over the generic API key.
 
 Before running an actual transcription command, explain and confirm the data transfer:
 

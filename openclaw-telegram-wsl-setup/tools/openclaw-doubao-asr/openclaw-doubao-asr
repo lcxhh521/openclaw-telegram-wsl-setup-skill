@@ -14,6 +14,8 @@ Usage:
 
 Environment:
   VOLCENGINE_ASR_API_KEY      optional; falls back to VOLCANO_ENGINE_API_KEY, VOLCENGINE_API_KEY, DOUBAO_ASR_API_KEY
+  VOLCENGINE_ASR_APP_KEY      optional; preferred with VOLCENGINE_ASR_ACCESS_KEY for speech-service auth
+  VOLCENGINE_ASR_ACCESS_KEY   optional; preferred with VOLCENGINE_ASR_APP_KEY for speech-service auth
   VOLCENGINE_ASR_RESOURCE_ID  default: volc.bigasr.auc_turbo
   VOLCENGINE_ASR_ENDPOINT     default: https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash
   VOLCENGINE_ASR_MODEL_NAME   default: bigmodel
@@ -118,6 +120,8 @@ if [[ -r "$env_file" ]]; then
 fi
 
 api_key="${VOLCENGINE_ASR_API_KEY:-${VOLCANO_ENGINE_API_KEY:-${VOLCENGINE_API_KEY:-${DOUBAO_ASR_API_KEY:-}}}}"
+app_key="${VOLCENGINE_ASR_APP_KEY:-${VOLCENGINE_ASR_APP_ID:-${VOLCENGINE_STANDARD_APP_KEY:-${VOLCENGINE_STANDARD_APP_ID:-}}}}"
+access_key="${VOLCENGINE_ASR_ACCESS_KEY:-${VOLCENGINE_ASR_ACCESS_TOKEN:-${VOLCENGINE_STANDARD_ACCESS_KEY:-${VOLCENGINE_STANDARD_ACCESS_TOKEN:-}}}}"
 resource_id="${VOLCENGINE_ASR_RESOURCE_ID:-volc.bigasr.auc_turbo}"
 endpoint="${VOLCENGINE_ASR_ENDPOINT:-https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash}"
 model_name="${VOLCENGINE_ASR_MODEL_NAME:-bigmodel}"
@@ -128,11 +132,22 @@ standard_model_name="${VOLCENGINE_STANDARD_MODEL_NAME:-bigmodel}"
 uid="${VOLCENGINE_ASR_UID:-local-openclaw}"
 
 if [[ "$self_check" -eq 1 ]]; then
-  if [[ -z "$api_key" ]]; then
+  if [[ -n "$app_key" && -n "$access_key" ]]; then
+    auth_mode="app_access"
+  elif [[ -n "$api_key" ]]; then
+    auth_mode="api_key"
+  else
+    auth_mode="missing"
+  fi
+  if [[ "$auth_mode" == "missing" ]]; then
     echo "asr_key=missing"
+    echo "auth_mode=missing"
     exit 1
   fi
   echo "asr_key=present"
+  echo "auth_mode=$auth_mode"
+  if [[ -n "$app_key" ]]; then echo "app_key=present"; else echo "app_key=missing"; fi
+  if [[ -n "$access_key" ]]; then echo "access_key=present"; else echo "access_key=missing"; fi
   echo "resource_id=$resource_id"
   echo "endpoint=$endpoint"
   echo "model_name=$model_name"
@@ -160,8 +175,8 @@ if [[ "$mode" == "standard" && -z "$audio_url" && -z "$query_id" ]]; then
   exit 2
 fi
 
-if [[ -z "$api_key" ]]; then
-  echo "Missing Volcengine API key. Set VOLCENGINE_ASR_API_KEY or save ~/.openclaw/secrets/volcengine.env." >&2
+if [[ -z "$api_key" && ( -z "$app_key" || -z "$access_key" ) ]]; then
+  echo "Missing Volcengine ASR auth. Set VOLCENGINE_ASR_API_KEY or VOLCENGINE_ASR_APP_KEY + VOLCENGINE_ASR_ACCESS_KEY." >&2
   exit 1
 fi
 
@@ -182,6 +197,8 @@ poll_interval = int(sys.argv[6])
 poll_timeout = int(sys.argv[7])
 
 api_key = os.environ.get("VOLCENGINE_ASR_API_KEY") or os.environ.get("VOLCANO_ENGINE_API_KEY") or os.environ.get("VOLCENGINE_API_KEY") or os.environ.get("DOUBAO_ASR_API_KEY")
+app_key = os.environ.get("VOLCENGINE_ASR_APP_KEY") or os.environ.get("VOLCENGINE_ASR_APP_ID") or os.environ.get("VOLCENGINE_STANDARD_APP_KEY") or os.environ.get("VOLCENGINE_STANDARD_APP_ID")
+access_key = os.environ.get("VOLCENGINE_ASR_ACCESS_KEY") or os.environ.get("VOLCENGINE_ASR_ACCESS_TOKEN") or os.environ.get("VOLCENGINE_STANDARD_ACCESS_KEY") or os.environ.get("VOLCENGINE_STANDARD_ACCESS_TOKEN")
 submit_endpoint = os.environ.get("VOLCENGINE_STANDARD_SUBMIT_ENDPOINT", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit")
 query_endpoint = os.environ.get("VOLCENGINE_STANDARD_QUERY_ENDPOINT", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query")
 resource_id = os.environ.get("VOLCENGINE_STANDARD_RESOURCE_ID", "volc.seedasr.auc")
@@ -191,11 +208,15 @@ uid = os.environ.get("VOLCENGINE_ASR_UID", "local-openclaw")
 def call(endpoint, payload, request_id):
     headers = {
         "Content-Type": "application/json",
-        "X-Api-Key": api_key,
         "X-Api-Resource-Id": resource_id,
         "X-Api-Request-Id": request_id,
         "X-Api-Sequence": "-1",
     }
+    if app_key and access_key:
+        headers["X-Api-App-Key"] = app_key
+        headers["X-Api-Access-Key"] = access_key
+    else:
+        headers["X-Api-Key"] = api_key
     req = urllib.request.Request(
         endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -308,6 +329,8 @@ import uuid
 
 audio_path, output_path, text_only = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 api_key = os.environ.get("VOLCENGINE_ASR_API_KEY") or os.environ.get("VOLCANO_ENGINE_API_KEY") or os.environ.get("VOLCENGINE_API_KEY") or os.environ.get("DOUBAO_ASR_API_KEY")
+app_key = os.environ.get("VOLCENGINE_ASR_APP_KEY") or os.environ.get("VOLCENGINE_ASR_APP_ID") or os.environ.get("VOLCENGINE_STANDARD_APP_KEY") or os.environ.get("VOLCENGINE_STANDARD_APP_ID")
+access_key = os.environ.get("VOLCENGINE_ASR_ACCESS_KEY") or os.environ.get("VOLCENGINE_ASR_ACCESS_TOKEN") or os.environ.get("VOLCENGINE_STANDARD_ACCESS_KEY") or os.environ.get("VOLCENGINE_STANDARD_ACCESS_TOKEN")
 endpoint = os.environ.get("VOLCENGINE_ASR_ENDPOINT", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash")
 resource_id = os.environ.get("VOLCENGINE_ASR_RESOURCE_ID", "volc.bigasr.auc_turbo")
 model_name = os.environ.get("VOLCENGINE_ASR_MODEL_NAME", "bigmodel")
@@ -324,11 +347,15 @@ payload = {
 
 headers = {
     "Content-Type": "application/json",
-    "X-Api-Key": api_key,
     "X-Api-Resource-Id": resource_id,
     "X-Api-Request-Id": str(uuid.uuid4()),
     "X-Api-Sequence": "-1",
 }
+if app_key and access_key:
+    headers["X-Api-App-Key"] = app_key
+    headers["X-Api-Access-Key"] = access_key
+else:
+    headers["X-Api-Key"] = api_key
 
 request = urllib.request.Request(
     endpoint,

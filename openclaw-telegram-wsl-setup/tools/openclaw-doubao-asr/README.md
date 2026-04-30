@@ -68,10 +68,17 @@ VOLCENGINE_STANDARD_MODEL_NAME=bigmodel
 The key is read from one of:
 
 ```text
+VOLCENGINE_ASR_APP_KEY + VOLCENGINE_ASR_ACCESS_KEY
 VOLCENGINE_ASR_API_KEY
 VOLCANO_ENGINE_API_KEY
 VOLCENGINE_API_KEY
 DOUBAO_ASR_API_KEY
+```
+
+When the speech-service page provides `APP ID` and `Access Token`, save them locally with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Set-DoubaoAsrCredentials.ps1
 ```
 
 ## Practical role

@@ -160,6 +160,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-DoubaoAsrTool.
 openclaw-doubao-asr --self-check
 ```
 
+如果火山语音服务页面给的是 `APP ID / Access Token`，用本地终端录入，不要发到聊天里：
+
+```powershell
+cd .\openclaw-telegram-wsl-setup\tools\openclaw-doubao-asr
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Set-DoubaoAsrCredentials.ps1
+```
+
 如果自检显示 key 存在、资源 ID 是 `volc.bigasr.auc_turbo`，但转写仍失败，优先去火山控制台确认“大模型录音文件识别”资源是否开通、项目是否有权限、套餐或额度是否可用。
 
 实际使用时：
