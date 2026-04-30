@@ -857,8 +857,7 @@ namespace OpenClawLocalMonitor
             var info = new InfoBadge
             {
                 Location = new Point(86, 12),
-                Size = new Size(15, 15),
-                Cursor = Cursors.Help
+                Size = new Size(15, 15)
             };
             tokenCost.Panel.Controls.Add(info);
             info.BringToFront();
