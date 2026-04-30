@@ -1,6 +1,6 @@
 ---
 name: openclaw-telegram-wsl-setup
-description: "Set up and repair OpenClaw's Telegram channel on Windows through WSL2. Use when the user wants OpenClaw to reply through Telegram, asks how OpenClaw was installed or should be kept running in WSL, needs WSL/OpenClaw/gateway readiness checks, gateway keepalive/autostart repair, long-offline network recovery, stale socket or polling recovery after internet loss, safe Telegram bot token entry, proxy-aware Telegram connectivity, pairing approval, channel startup verification, or diagnosis of Telegram messages that are not received, not answered, answered only after a long delay, or only work while WSL is awake."
+description: "Set up and repair OpenClaw's Telegram channel on Windows through WSL2. Use when the user wants OpenClaw to reply through Telegram, asks how OpenClaw was installed or should be kept running in WSL, needs WSL/OpenClaw/gateway readiness checks, gateway keepalive/autostart repair, local OpenClaw Monitor panel installation, long-offline network recovery, stale socket or polling recovery after internet loss, safe Telegram bot token entry, proxy-aware Telegram connectivity, pairing approval, channel startup verification, or diagnosis of Telegram messages that are not received, not answered, answered only after a long delay, or only work while WSL is awake."
 ---
 
 # OpenClaw Telegram WSL Setup
@@ -217,12 +217,20 @@ Codex may be able to infer and run the right install commands from the current e
 10. Verify `openclaw gateway probe`.
    - Do not continue to Telegram until gateway responds, not merely listens.
 
-11. Configure Telegram using a local token prompt or token file.
+11. Install or verify the local OpenClaw Monitor panel on Windows when this skill bundle includes `tools/openclaw-local-monitor`.
+   - Treat the panel as optional but recommended infrastructure after gateway/model/keepalive are healthy.
+   - The monitor is read-only and should not store tokens, auth profiles, logs, or raw OpenClaw config.
+   - Build it locally on Windows from source; do not download or run third-party binaries.
+   - Install it to a user-local path such as `%LOCALAPPDATA%\OpenClawMonitor`, create a Startup-folder shortcut, and start it as a tray-capable app.
+   - Explain its strict backend-task meaning: the "后台任务" count should only come from `queued/running` tasks plus active/blocked/cancel-requested TaskFlow pressure. Recent Telegram/session activity is only context and must not be presented as a running background task.
+   - Verify the panel opens and can be minimized/closed to the system tray.
+
+12. Configure Telegram using a local token prompt or token file.
    - Guide the user through BotFather in Telegram if they do not already have a bot.
    - Token entry happens only in the local terminal prompt, never in chat.
    - Close token-entry windows after `openclaw channels status --json --timeout 30000` shows the token/config is available, unless the window is also the active gateway/keepalive path.
 
-12. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
+13. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
    - Explain the 60-120 second startup window.
    - Ask for a fresh message only after Telegram is ready or the startup grace period has passed.
    - Close successful setup windows after end-to-end Telegram reply verification, leaving only intentional hidden/minimized keepalive infrastructure.
@@ -803,6 +811,60 @@ wsl -d Ubuntu -- bash -lc 'systemctl --user restart openclaw-gateway.service'
 ```
 
 Prefer the WSL timer when the user wants continuous recovery without configuring Windows event triggers.
+
+## Local OpenClaw Monitor Panel
+
+After OpenClaw is installed, the gateway is reachable, the model is verified, and keepalive/autostart is in place, install the local Windows monitor panel when the skill bundle includes:
+
+```text
+tools/openclaw-local-monitor/
+```
+
+The panel is a user-local, read-only Windows utility. It should help the user answer:
+
+- Is the gateway reachable?
+- Is Telegram connected?
+- Are there real background tasks running?
+- Where are token/context snapshots flowing: main session, Telegram, or subtask?
+- Are there recent Telegram/error notices?
+
+Important semantics:
+
+- "后台任务" means strict backend work only: `openclaw tasks list --json` entries with `status=queued` or `status=running`, plus TaskFlow pressure from `openclaw tasks flow list` where active/blocked/cancel-requested is nonzero.
+- Recent Telegram messages, recently updated sessions, or token growth are not enough to say a background task is running. Show them only as context.
+- The panel must stay read-only. It must not edit OpenClaw config, auth profiles, tokens, provider keys, channel settings, or gateway service files.
+- The panel must not print or store secrets.
+- The compiled `.exe` is a local build artifact. Do not commit it to the skill repo.
+
+Preferred install command from the skill's monitor directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-OpenClawMonitor.ps1
+```
+
+What the installer should do:
+
+1. Copy monitor source/assets into `%LOCALAPPDATA%\OpenClawMonitor`.
+2. Build `OpenClawMonitor.exe` with the built-in .NET Framework compiler.
+3. Create a Startup-folder shortcut named `OpenClaw Monitor.lnk`.
+4. Start the monitor.
+5. Verify that the window opens, shows the custom icon, and minimizes/closes to the system tray.
+
+Manual build command if needed:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-OpenClawMonitor.ps1
+```
+
+If the user's WSL distro differs from the default, adjust `WslDistro` in `OpenClawMonitor.cs` before building. The default assumptions are:
+
+```text
+WSL distro: Ubuntu
+OpenClaw command: openclaw is available on the WSL login-shell PATH
+Gateway URL: ws://127.0.0.1:18789
+```
+
+If the monitor shows no backend task while OpenClaw recently replied in Telegram, explain that these are different signals: the backend task table is authoritative for queued/running tasks, while Telegram/session recency is only activity context.
 
 ## Telegram Setup And Pairing
 

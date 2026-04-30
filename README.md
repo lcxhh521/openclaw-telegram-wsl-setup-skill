@@ -34,6 +34,7 @@ Windows
   -> 模型选择与本地回复验证
   -> Windows 登录后的 keepalive/autostart
   -> 长时间断网后的 network recovery watchdog
+  -> 本机 OpenClaw Monitor 状态面板
   -> Telegram Bot
 ```
 
@@ -51,6 +52,7 @@ Windows
 - 为 network recovery watchdog 加防抖和冷却：单次网络探测失败或单次 gateway 探测失败只记录，不立刻重启，避免 watchdog 自己制造回复延迟。
 - 在 watchdog 内用本地 HTTP 仪表盘端口检查 gateway 健康，不在 systemd timer 环境里调用 `openclaw gateway probe`，避免 CLI 环境差异造成误判。
 - 为 gateway 启动加入宽限期：OpenClaw 启动、补装 bundled runtime dependencies、启动 channels/sidecars 时，watchdog 不应因为 HTTP 探测暂时失败而重启 gateway。
+- 安装本机只读 OpenClaw Monitor 面板，用 Windows 原生小程序显示 gateway、Telegram、后台任务、TaskFlow、Token/上下文流向、最近会话和日志提醒，并支持系统托盘常驻。
 - 在接入 Telegram 之前，先选择模型并验证 OpenClaw 本地可以正常回复。
 - 管理安装过程中弹出的终端窗口：需要用户操作的窗口保留，不需要的窗口及时关闭。
 - 安全配置 Telegram bot token，避免用户把 token 粘贴到聊天里。
@@ -66,8 +68,17 @@ Windows
 |-- .gitignore
 `-- openclaw-telegram-wsl-setup/
     |-- SKILL.md
-    `-- agents/
-        `-- openai.yaml
+    |-- agents/
+    |   `-- openai.yaml
+    `-- tools/
+        `-- openclaw-local-monitor/
+            |-- OpenClawMonitor.cs
+            |-- Build-OpenClawMonitor.ps1
+            |-- Install-OpenClawMonitor.ps1
+            |-- Install-Autostart.ps1
+            |-- Uninstall-Autostart.ps1
+            |-- OpenClawMonitor.ico
+            `-- README.md
 ```
 
 真正的 skill 是：
@@ -76,7 +87,32 @@ Windows
 openclaw-telegram-wsl-setup/
 ```
 
-这个目录应保持干净，只包含 skill 本身需要的文件。不要把本机 OpenClaw 配置、Telegram token、日志、截图、启动脚本或机器专属诊断文件放进去。
+这个目录应保持干净，只包含 skill 本身需要的文件和可复用工具。不要把本机 OpenClaw 配置、Telegram token、日志、截图、编译产物或机器专属诊断文件放进去。
+
+## 本机 OpenClaw Monitor 面板
+
+仓库附带一个 Windows 原生监控面板：
+
+```text
+openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/
+```
+
+它用于安装完成后的日常观察，不替代 OpenClaw 官方仪表盘。面板只读，不修改 OpenClaw 配置，主要显示：
+
+- gateway 和 Telegram 是否可用。
+- 后台是否存在 `queued/running` task 或活跃 TaskFlow。
+- Token / 上下文使用快照，以及主会话、Telegram、子任务的流向。
+- 最近会话和 Telegram/error 日志提醒。
+- 系统托盘常驻，最小化或关闭窗口时隐藏到托盘。
+
+安装命令：
+
+```powershell
+cd .\openclaw-telegram-wsl-setup\tools\openclaw-local-monitor
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-OpenClawMonitor.ps1
+```
+
+安装脚本会把源码复制到 `%LOCALAPPDATA%\OpenClawMonitor`，在本机编译 `OpenClawMonitor.exe`，创建 Startup-folder 自启动快捷方式，并启动面板。仓库不提交编译出来的 `.exe`。
 
 ## 本地安装到 Codex
 

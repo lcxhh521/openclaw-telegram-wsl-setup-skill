@@ -1,0 +1,949 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+
+namespace OpenClawLocalMonitor
+{
+    static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MonitorForm());
+        }
+    }
+
+    sealed class CommandResult
+    {
+        public bool Ok;
+        public int ExitCode;
+        public string Stdout = "";
+        public string Stderr = "";
+        public string Error = "";
+    }
+
+    sealed class Snapshot
+    {
+        public DateTime GeneratedAt = DateTime.Now;
+        public string State = "Idle";
+        public bool GatewayOk;
+        public bool TelegramOk;
+        public int RunningTasks;
+        public int AuditWarnings;
+        public int AuditErrors;
+        public string GatewayText = "-";
+        public string TelegramText = "-";
+        public string RecentSessionAge = "-";
+        public string StatusLine = "";
+        public string Error = "";
+        public long TokenTotal;
+        public long TokenInput;
+        public long TokenOutput;
+        public long TokenCacheRead;
+        public string TokenContext = "-";
+        public long LastSessionAgeMs = -1;
+        public string LastSessionSource = "-";
+        public string LastSessionModel = "-";
+        public int FlowActive;
+        public int FlowBlocked;
+        public int FlowCancelRequested;
+        public readonly List<string[]> Tasks = new List<string[]>();
+        public readonly List<string> Sessions = new List<string>();
+        public readonly List<string> Logs = new List<string>();
+        public readonly List<string> TokenFlows = new List<string>();
+    }
+
+    sealed class MonitorForm : Form
+    {
+        const string WslDistro = "Ubuntu";
+        const string OpenClawCommand = "openclaw";
+        readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 100 };
+        readonly Timer timer = new Timer();
+        bool refreshing;
+
+        Label updated;
+        Label statusLine;
+        Button refreshButton;
+        Card overall;
+        Card gateway;
+        Card telegram;
+        Card tasks;
+        Card audit;
+        Card session;
+        Card tokenTotal;
+        Card tokenInput;
+        Card tokenOutput;
+        Card tokenCache;
+        Label heroTitle;
+        Label heroDetail;
+        Label legendLine;
+        DataGridView taskGrid;
+        ListBox tokenList;
+        ListBox sessionList;
+        ListBox logList;
+        NotifyIcon trayIcon;
+        ContextMenuStrip trayMenu;
+        bool allowExit;
+        bool trayNoticeShown;
+
+        public MonitorForm()
+        {
+            Text = "OpenClaw 监控面板";
+            StartPosition = FormStartPosition.CenterScreen;
+            MinimumSize = new Size(1120, 940);
+            ClientSize = new Size(1220, 900);
+            AutoScroll = true;
+            BackColor = Color.FromArgb(246, 248, 252);
+            ForeColor = Color.FromArgb(31, 41, 55);
+            Font = new Font("Microsoft YaHei UI", 9f);
+            var iconPath = Path.Combine(Application.StartupPath, "OpenClawMonitor.ico");
+            if (File.Exists(iconPath)) Icon = new Icon(iconPath);
+
+            BuildUi();
+            SetupTray();
+            timer.Interval = 12000;
+            timer.Tick += async (s, e) => await RefreshAsync();
+            timer.Start();
+            Shown += async (s, e) => await RefreshAsync();
+            Resize += (s, e) =>
+            {
+                if (WindowState == FormWindowState.Minimized) HideToTray();
+            };
+            FormClosing += (s, e) =>
+            {
+                if (!allowExit)
+                {
+                    e.Cancel = true;
+                    HideToTray();
+                }
+            };
+        }
+
+        void SetupTray()
+        {
+            trayMenu = new ContextMenuStrip();
+            trayMenu.Items.Add("显示面板", null, (s, e) => ShowFromTray());
+            trayMenu.Items.Add("立即刷新", null, async (s, e) =>
+            {
+                ShowFromTray();
+                await RefreshAsync();
+            });
+            trayMenu.Items.Add(new ToolStripSeparator());
+            trayMenu.Items.Add("退出监控面板", null, (s, e) =>
+            {
+                allowExit = true;
+                trayIcon.Visible = false;
+                Close();
+            });
+
+            trayIcon = new NotifyIcon
+            {
+                Text = "OpenClaw 监控面板",
+                Icon = Icon,
+                Visible = true,
+                ContextMenuStrip = trayMenu
+            };
+            trayIcon.DoubleClick += (s, e) => ShowFromTray();
+        }
+
+        void HideToTray()
+        {
+            Hide();
+            ShowInTaskbar = false;
+            if (!trayNoticeShown)
+            {
+                trayNoticeShown = true;
+                trayIcon.ShowBalloonTip(1800, "OpenClaw 监控面板", "已在后台托盘运行。双击图标可打开。", ToolTipIcon.Info);
+            }
+        }
+
+        void ShowFromTray()
+        {
+            ShowInTaskbar = true;
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        }
+
+        void BuildUi()
+        {
+            Controls.Add(MakeLabel("OpenClaw 监控面板", 28, 20, 360, 34, 20f, Color.FromArgb(15, 23, 42), true));
+            Controls.Add(MakeLabel("本机只读状态中心：运行、Telegram、任务、Token 流向", 30, 56, 720, 24, 9f, Color.FromArgb(100, 116, 139), false));
+
+            updated = MakeLabel("等待首次刷新...", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
+            Controls.Add(updated);
+            refreshButton = new Button
+            {
+                Text = "刷新",
+                Location = new Point(1090, 20),
+                Size = new Size(92, 36),
+                BackColor = Color.FromArgb(37, 99, 235),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            refreshButton.FlatAppearance.BorderSize = 0;
+            refreshButton.Click += async (s, e) => await RefreshAsync();
+            Controls.Add(refreshButton);
+
+            var hero = new RoundedPanel
+            {
+                Location = new Point(28, 92),
+                Size = new Size(1154, 118),
+                BackColor = Color.White,
+                BorderColor = Color.FromArgb(226, 232, 240),
+                Radius = 18
+            };
+            heroTitle = MakeLabel("正在检查 OpenClaw...", 28, 18, 520, 38, 22f, Color.FromArgb(15, 23, 42), true);
+            heroDetail = MakeLabel("正在等待首次刷新。", 30, 60, 1000, 28, 10f, Color.FromArgb(71, 85, 105), false);
+            hero.Controls.AddRange(new Control[] { heroTitle, heroDetail });
+            Controls.Add(hero);
+
+            overall = new Card("状态", 28, 232, 176, 88);
+            gateway = new Card("网关", 220, 232, 176, 88);
+            telegram = new Card("Telegram", 412, 232, 176, 88);
+            tasks = new Card("后台任务", 604, 232, 176, 88);
+            audit = new Card("提醒", 796, 232, 176, 88);
+            session = new Card("最近活动", 988, 232, 194, 88);
+            Controls.AddRange(new Control[] { overall.Panel, gateway.Panel, telegram.Panel, tasks.Panel, audit.Panel, session.Panel });
+
+            Controls.Add(MakeLabel("Token / 成本流向", 28, 344, 260, 24, 12f, Color.FromArgb(15, 23, 42), true));
+            tokenTotal = new Card("上下文占用", 28, 376, 176, 84);
+            tokenInput = new Card("输入 Token", 220, 376, 176, 84);
+            tokenOutput = new Card("输出 Token", 412, 376, 176, 84);
+            tokenCache = new Card("缓存读取", 604, 376, 176, 84);
+            Controls.AddRange(new Control[] { tokenTotal.Panel, tokenInput.Panel, tokenOutput.Panel, tokenCache.Panel });
+            tokenList = MakeList(796, 376, 386, 84);
+            Controls.Add(tokenList);
+
+            Controls.Add(MakeLabel("现在在做什么", 28, 486, 260, 24, 12f, Color.FromArgb(15, 23, 42), true));
+            taskGrid = new DataGridView
+            {
+                Location = new Point(28, 516),
+                Size = new Size(1154, 150),
+                BackgroundColor = Color.White,
+                GridColor = Color.FromArgb(226, 232, 240),
+                ForeColor = Color.FromArgb(31, 41, 55),
+                RowHeadersVisible = false,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                ReadOnly = true,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                EnableHeadersVisualStyles = false
+            };
+            taskGrid.DefaultCellStyle.BackColor = Color.White;
+            taskGrid.DefaultCellStyle.ForeColor = Color.FromArgb(31, 41, 55);
+            taskGrid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(219, 234, 254);
+            taskGrid.DefaultCellStyle.SelectionForeColor = Color.FromArgb(30, 64, 175);
+            taskGrid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(241, 245, 249);
+            taskGrid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(51, 65, 85);
+            taskGrid.Columns.Add("label", "任务");
+            taskGrid.Columns.Add("runtime", "类型");
+            taskGrid.Columns.Add("status", "状态");
+            taskGrid.Columns.Add("age", "持续");
+            taskGrid.Columns.Add("last", "最近事件");
+            Controls.Add(taskGrid);
+
+            Controls.Add(MakeLabel("最近会话", 28, 692, 240, 24, 12f, Color.FromArgb(15, 23, 42), true));
+            sessionList = MakeList(28, 722, 560, 120);
+            Controls.Add(sessionList);
+
+            Controls.Add(MakeLabel("最近提醒", 622, 692, 330, 24, 12f, Color.FromArgb(15, 23, 42), true));
+            logList = MakeList(622, 722, 560, 120);
+            Controls.Add(logList);
+
+            statusLine = MakeLabel("", 28, 852, 1154, 24, 9f, Color.FromArgb(100, 116, 139), false);
+            Controls.Add(statusLine);
+            legendLine = MakeLabel("绿色=就绪，蓝色=正在工作，黄色=需要留意，红色=需要处理。", 28, 874, 1154, 22, 8.5f, Color.FromArgb(148, 163, 184), false);
+            Controls.Add(legendLine);
+        }
+
+        ListBox MakeList(int x, int y, int w, int h)
+        {
+            return new ListBox
+            {
+                Location = new Point(x, y),
+                Size = new Size(w, h),
+                BackColor = Color.White,
+                ForeColor = Color.FromArgb(31, 41, 55),
+                BorderStyle = BorderStyle.None,
+                Font = new Font("Microsoft YaHei UI", 9f)
+            };
+        }
+
+        Label MakeLabel(string text, int x, int y, int w, int h, float size, Color color, bool bold)
+        {
+            return new Label
+            {
+                Text = text,
+                Location = new Point(x, y),
+                Size = new Size(w, h),
+                ForeColor = color,
+                BackColor = Color.Transparent,
+                Font = new Font("Microsoft YaHei UI", size, bold ? FontStyle.Bold : FontStyle.Regular)
+            };
+        }
+
+        async Task RefreshAsync()
+        {
+            if (refreshing) return;
+            refreshing = true;
+            updated.Text = "刷新中...";
+            refreshButton.Enabled = false;
+            try
+            {
+                var snapshot = await Task.Run(() => BuildSnapshot());
+                Render(snapshot);
+            }
+            catch (Exception ex)
+            {
+                updated.Text = "刷新失败";
+                statusLine.Text = ex.Message;
+            }
+            finally
+            {
+                refreshing = false;
+                refreshButton.Enabled = true;
+            }
+        }
+
+        Snapshot BuildSnapshot()
+        {
+            var probeTask = Task.Run(() => RunOpenClawJson(new[] { "gateway", "probe", "--json" }, 35000));
+            var statusTask = Task.Run(() => RunOpenClawJson(new[] { "status", "--json" }, 35000));
+            var tasksTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "list", "--json" }, 35000));
+            var flowsTask = Task.Run(() => RunOpenClawText(new[] { "tasks", "flow", "list" }, 35000));
+            var auditTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "audit", "--json" }, 35000));
+            var logsTask = Task.Run(() => RunLogs());
+            Task.WaitAll(probeTask, statusTask, tasksTask, flowsTask, auditTask, logsTask);
+
+            var probe = probeTask.Result;
+            var status = statusTask.Result;
+            var taskData = tasksTask.Result;
+            var flowData = flowsTask.Result;
+            var auditData = auditTask.Result;
+            var logs = logsTask.Result;
+
+            var snapshot = new Snapshot();
+            if (!probe.Item1)
+            {
+                snapshot.Error = probe.Item3;
+                snapshot.State = "Problem";
+                snapshot.GatewayText = "探针失败";
+                snapshot.StatusLine = probe.Item3;
+            }
+            else
+            {
+                FillFromProbe(snapshot, probe.Item2);
+            }
+            FillTokenUsage(snapshot, status.Item2);
+            FillTasks(snapshot, taskData.Item2);
+            FillFlows(snapshot, flowData);
+            FillAudit(snapshot, auditData.Item2);
+            FillLogs(snapshot, logs);
+
+            if ((snapshot.RunningTasks > 0 || snapshot.FlowActive > 0 || snapshot.FlowBlocked > 0 || snapshot.FlowCancelRequested > 0) && snapshot.State != "Problem")
+                snapshot.State = "Working";
+
+            snapshot.StatusLine = string.IsNullOrWhiteSpace(snapshot.StatusLine)
+                ? snapshot.GatewayText + " | 只读 | 每 12 秒刷新"
+                : snapshot.StatusLine;
+            return snapshot;
+        }
+
+        void FillFromProbe(Snapshot s, object probeObj)
+        {
+            var probe = AsDict(probeObj);
+            s.GatewayOk = ToBool(Get(probe, "ok"));
+            var target = First(AsList(Get(probe, "targets")));
+            var targetDict = AsDict(target);
+            var connect = AsDict(Get(targetDict, "connect"));
+            var health = AsDict(Get(targetDict, "health"));
+            var channels = AsDict(Get(health, "channels"));
+            var telegramChannel = AsDict(Get(channels, "telegram"));
+            var network = AsDict(Get(probe, "network"));
+
+            var rpcOk = ToBool(Get(connect, "rpcOk"));
+            var latency = ToLong(Get(connect, "latencyMs"));
+            s.GatewayOk = s.GatewayOk && rpcOk;
+            s.GatewayText = s.GatewayOk
+                ? "可连接 " + (latency >= 0 ? latency + "毫秒" : "")
+                : "需检查";
+
+            var tgConfigured = ToBool(Get(telegramChannel, "configured"));
+            var tgRunning = ToBool(Get(telegramChannel, "running"));
+            var tgConnected = ToBool(Get(telegramChannel, "connected"));
+            s.TelegramOk = tgConfigured && tgRunning && tgConnected;
+            s.TelegramText = !tgConfigured ? "未配置" : (s.TelegramOk ? "已连接" : "需检查");
+
+            var summary = AsDict(Get(targetDict, "summary"));
+            var summaryTasks = AsDict(Get(summary, "tasks"));
+            if (summaryTasks.Count > 0)
+                s.RunningTasks = Math.Max(s.RunningTasks, (int)Math.Max(0, ToLong(Get(summaryTasks, "active"))));
+
+            var sessions = AsDict(Get(health, "sessions"));
+            var recent = AsList(Get(sessions, "recent"));
+            foreach (var item in recent.Cast<object>().Take(8))
+            {
+                var row = AsDict(item);
+                var age = ToLong(Get(row, "age"));
+                var key = Convert.ToString(Get(row, "key") ?? "");
+                s.Sessions.Add(Pad(Age(age), 7) + " " + Trim(key, 70));
+            }
+            if (recent.Count > 0)
+            {
+                var age = ToLong(Get(AsDict(recent[0]), "age"));
+                s.RecentSessionAge = Age(age);
+                s.LastSessionAgeMs = age;
+                s.LastSessionSource = TokenSource(Convert.ToString(Get(AsDict(recent[0]), "key") ?? ""));
+                s.LastSessionModel = Convert.ToString(Get(AsDict(recent[0]), "model") ?? "-");
+            }
+
+            var url = Convert.ToString(Get(network, "localLoopbackUrl") ?? "ws://127.0.0.1:18789");
+            s.StatusLine = url + " | Telegram " + s.TelegramText;
+            if (!s.GatewayOk || (tgConfigured && !s.TelegramOk)) s.State = "Problem";
+            if (s.GatewayOk && s.TelegramOk && s.State == "Idle") s.State = "Ready";
+        }
+
+        void FillTasks(Snapshot s, object tasksObj)
+        {
+            var data = AsDict(tasksObj);
+            var items = AsList(Get(data, "tasks"));
+            var activeItems = items.Cast<object>()
+                .Select(item => AsDict(item))
+                .Where(row =>
+                {
+                    var status = Convert.ToString(Get(row, "status") ?? "").ToLowerInvariant();
+                    return status == "running" || status == "queued";
+                })
+                .ToList();
+
+            s.RunningTasks = activeItems.Count;
+            foreach (var row in activeItems.Take(20))
+            {
+                var label = Convert.ToString(Get(row, "label") ?? Get(row, "taskId") ?? "任务");
+                var runtime = Convert.ToString(Get(row, "runtime") ?? "-");
+                var status = TranslateTaskStatus(Convert.ToString(Get(row, "status") ?? "-"));
+                var created = AgeSince(ToLong(Get(row, "createdAt")));
+                var last = AgeSince(ToLong(Get(row, "lastEventAt")));
+                s.Tasks.Add(new[] { Trim(label, 42), runtime, status, created, last });
+            }
+        }
+
+        void FillFlows(Snapshot s, Tuple<bool, string, string> flowData)
+        {
+            if (flowData == null || !flowData.Item1 || string.IsNullOrWhiteSpace(flowData.Item2)) return;
+            var match = System.Text.RegularExpressions.Regex.Match(
+                flowData.Item2,
+                @"TaskFlow pressure:\s*(\d+)\s+active\s+.\s+(\d+)\s+blocked\s+.\s+(\d+)\s+cancel-requested");
+            if (!match.Success) return;
+
+            s.FlowActive = (int)ToLong(match.Groups[1].Value);
+            s.FlowBlocked = (int)ToLong(match.Groups[2].Value);
+            s.FlowCancelRequested = (int)ToLong(match.Groups[3].Value);
+
+            if (s.FlowActive > 0 || s.FlowBlocked > 0 || s.FlowCancelRequested > 0)
+            {
+                var status = s.FlowActive > 0 ? "运行中" : s.FlowBlocked > 0 ? "阻塞" : "取消中";
+                var last = "active " + s.FlowActive + " / blocked " + s.FlowBlocked + " / cancel " + s.FlowCancelRequested;
+                s.Tasks.Add(new[] { "TaskFlow 后台流程", "flow", status, "-", last });
+            }
+        }
+
+        void FillTokenUsage(Snapshot s, object statusObj)
+        {
+            var status = AsDict(statusObj);
+            var sessionsRoot = AsDict(Get(status, "sessions"));
+            var recent = AsList(Get(sessionsRoot, "recent"));
+            foreach (var item in recent.Cast<object>().Take(12))
+            {
+                var row = AsDict(item);
+                var input = Math.Max(0, ToLong(Get(row, "inputTokens")));
+                var output = Math.Max(0, ToLong(Get(row, "outputTokens")));
+                var cacheRead = Math.Max(0, ToLong(Get(row, "cacheRead")));
+                var cacheWrite = Math.Max(0, ToLong(Get(row, "cacheWrite")));
+                var total = Math.Max(0, ToLong(Get(row, "totalTokens")));
+                var context = Math.Max(0, ToLong(Get(row, "contextTokens")));
+                var percent = ToLong(Get(row, "percentUsed"));
+                var key = Convert.ToString(Get(row, "key") ?? "");
+                var model = Convert.ToString(Get(row, "model") ?? "-");
+                var age = ToLong(Get(row, "age"));
+                var source = TokenSource(key);
+
+                if (s.LastSessionAgeMs < 0 || (age >= 0 && age < s.LastSessionAgeMs))
+                {
+                    s.LastSessionAgeMs = age;
+                    s.LastSessionSource = source;
+                    s.LastSessionModel = model;
+                    s.RecentSessionAge = Age(age);
+                }
+
+                s.TokenInput += input;
+                s.TokenOutput += output;
+                s.TokenCacheRead += cacheRead;
+                s.TokenTotal += total;
+
+                if (s.TokenContext == "-" && total > 0 && context > 0)
+                    s.TokenContext = FormatTokens(total) + " / " + FormatTokens(context) + (percent >= 0 ? " (" + percent + "%)" : "");
+
+                var bits = source + " · " + model + " · " + Age(age);
+                var usage = "总 " + FormatTokens(total) + "｜入 " + FormatTokens(input) + "｜出 " + FormatTokens(output) + "｜缓存 " + FormatTokens(cacheRead + cacheWrite);
+                s.TokenFlows.Add(bits + "    " + usage);
+            }
+
+            if (s.TokenFlows.Count == 0)
+                s.TokenFlows.Add("暂时没有可用的 Token 会话快照。");
+        }
+
+        string TokenSource(string key)
+        {
+            key = key ?? "";
+            if (key.Contains(":telegram:")) return "Telegram";
+            if (key.Contains(":subagent:")) return "子任务";
+            if (key.EndsWith(":main") || key.Contains(":main:main")) return "主会话";
+            if (key.Contains(":slash:")) return "命令";
+            return "直接会话";
+        }
+
+        void FillAudit(Snapshot s, object auditObj)
+        {
+            var audit = AsDict(auditObj);
+            var summary = AsDict(Get(audit, "summary"));
+            var combined = AsDict(Get(summary, "combined"));
+            s.AuditWarnings = (int)Math.Max(0, ToLong(Get(combined, "warnings")));
+            s.AuditErrors = (int)Math.Max(0, ToLong(Get(combined, "errors")));
+            if (s.AuditErrors > 0) s.State = "Problem";
+        }
+
+        void FillLogs(Snapshot s, List<Dictionary<string, object>> logs)
+        {
+            var interesting = logs
+                .Where(l =>
+                {
+                    var sub = Convert.ToString(Get(l, "subsystem") ?? "");
+                    var lvl = Convert.ToString(Get(l, "level") ?? "");
+                    return sub.Contains("telegram") || lvl == "error" || lvl == "warn";
+                })
+                .TakeLastCompat(16)
+                .ToList();
+
+            foreach (var log in interesting)
+            {
+                var time = Convert.ToString(Get(log, "time") ?? "");
+                var clock = time.Length >= 19 ? time.Substring(11, 8) : "--:--:--";
+                var level = TranslateLogLevel(Convert.ToString(Get(log, "level") ?? ""));
+                var subsystem = Trim(TranslateSubsystem(Convert.ToString(Get(log, "subsystem") ?? "")), 30);
+                var message = Trim(System.Text.RegularExpressions.Regex.Replace(Convert.ToString(Get(log, "message") ?? ""), "\\s+", " "), 115);
+                s.Logs.Add(clock + " " + Pad(level, 5) + " " + Pad(subsystem, 30) + " " + message);
+            }
+            if (s.Logs.Count == 0) s.Logs.Add("最近没有 Telegram 或错误日志。");
+        }
+
+        Tuple<bool, object, string> RunOpenClawJson(string[] args, int timeoutMs)
+        {
+            var all = new List<string> { "-d", WslDistro, "--", "bash", "-lc", BashCommand(args) };
+            var result = RunProcess("wsl.exe", all.ToArray(), timeoutMs);
+            if (!result.Ok) return Tuple.Create(false, (object)null, result.Stderr + result.Error);
+            try
+            {
+                return Tuple.Create(true, json.DeserializeObject(result.Stdout), "");
+            }
+            catch (Exception ex)
+            {
+                return Tuple.Create(false, (object)null, "JSON 解析失败：" + ex.Message);
+            }
+        }
+
+        Tuple<bool, string, string> RunOpenClawText(string[] args, int timeoutMs)
+        {
+            var all = new List<string> { "-d", WslDistro, "--", "bash", "-lc", BashCommand(args) };
+            var result = RunProcess("wsl.exe", all.ToArray(), timeoutMs);
+            return Tuple.Create(result.Ok, result.Stdout, result.Stderr + result.Error);
+        }
+
+        List<Dictionary<string, object>> RunLogs()
+        {
+            var result = RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", BashCommand(new[] { "logs", "--json", "--limit", "80", "--timeout", "10000" }) }, 20000);
+            var items = new List<Dictionary<string, object>>();
+            if (!result.Ok) return items;
+            foreach (var line in result.Stdout.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    var dict = AsDict(json.DeserializeObject(line));
+                    if (dict.Count > 0) items.Add(dict);
+                }
+                catch { }
+            }
+            return items;
+        }
+
+        string BashCommand(string[] args)
+        {
+            var parts = new List<string> { OpenClawCommand };
+            parts.AddRange(args.Select(ShellQuote));
+            return string.Join(" ", parts);
+        }
+
+        string ShellQuote(string arg)
+        {
+            if (arg == null) return "''";
+            return "'" + arg.Replace("'", "'\"'\"'") + "'";
+        }
+
+        CommandResult RunProcess(string file, string[] args, int timeoutMs)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = file,
+                Arguments = string.Join(" ", args.Select(QuoteArg)),
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            using (var proc = new Process { StartInfo = psi })
+            {
+                proc.Start();
+                var stdout = proc.StandardOutput.ReadToEndAsync();
+                var stderr = proc.StandardError.ReadToEndAsync();
+                if (!proc.WaitForExit(timeoutMs))
+                {
+                    try { proc.Kill(); } catch { }
+                    return new CommandResult { Ok = false, ExitCode = -1, Error = "命令超时" };
+                }
+                return new CommandResult
+                {
+                    Ok = proc.ExitCode == 0,
+                    ExitCode = proc.ExitCode,
+                    Stdout = stdout.Result,
+                    Stderr = stderr.Result
+                };
+            }
+        }
+
+        string QuoteArg(string arg)
+        {
+            if (arg == null) return "\"\"";
+            if (arg.IndexOfAny(new[] { ' ', '\t', '"' }) < 0) return arg;
+            return "\"" + arg.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        }
+
+        void Render(Snapshot s)
+        {
+            updated.Text = "已更新 " + s.GeneratedAt.ToString("HH:mm:ss");
+            heroTitle.Text = HeroTitle(s);
+            heroDetail.Text = HeroDetail(s);
+            heroTitle.ForeColor = HeroColor(s);
+            overall.Value.Text = DisplayState(s.State);
+            SetCard(overall, s.State == "Problem" ? "bad" : s.State == "Working" ? "work" : s.State == "Ready" ? "good" : "warn");
+            gateway.Value.Text = s.GatewayText;
+            SetCard(gateway, s.GatewayOk ? "good" : "bad");
+            telegram.Value.Text = s.TelegramText;
+            SetCard(telegram, s.TelegramOk ? "good" : "bad");
+            var backgroundTotal = s.RunningTasks + s.FlowActive + s.FlowBlocked + s.FlowCancelRequested;
+            tasks.Value.Text = backgroundTotal.ToString();
+            SetCard(tasks, backgroundTotal > 0 ? "work" : "good");
+            audit.Value.Text = s.AuditWarnings + " 提醒 / " + s.AuditErrors + " 错误";
+            SetCard(audit, s.AuditErrors > 0 ? "bad" : s.AuditWarnings > 0 ? "warn" : "good");
+            session.Value.Text = s.RecentSessionAge;
+            SetCard(session, s.RecentSessionAge == "-" ? "warn" : "good");
+
+            tokenTotal.Value.Text = s.TokenContext != "-" ? s.TokenContext : FormatTokens(s.TokenTotal);
+            SetCard(tokenTotal, s.TokenTotal > 0 ? "work" : "warn");
+            tokenInput.Value.Text = FormatTokens(s.TokenInput);
+            SetCard(tokenInput, s.TokenInput > 0 ? "good" : "warn");
+            tokenOutput.Value.Text = FormatTokens(s.TokenOutput);
+            SetCard(tokenOutput, s.TokenOutput > 0 ? "good" : "warn");
+            tokenCache.Value.Text = FormatTokens(s.TokenCacheRead);
+            SetCard(tokenCache, s.TokenCacheRead > 0 ? "good" : "warn");
+
+            tokenList.Items.Clear();
+            foreach (var row in s.TokenFlows) tokenList.Items.Add(row);
+            if (s.TokenFlows.Count == 0) tokenList.Items.Add("暂时没有可用的 Token 会话快照。");
+
+            taskGrid.Rows.Clear();
+            foreach (var row in s.Tasks) taskGrid.Rows.Add(row);
+
+            sessionList.Items.Clear();
+            foreach (var row in s.Sessions) sessionList.Items.Add(row);
+            if (s.Sessions.Count == 0) sessionList.Items.Add("探针没有返回会话数据。");
+
+            logList.Items.Clear();
+            foreach (var row in s.Logs) logList.Items.Add(row);
+
+            statusLine.Text = s.StatusLine;
+        }
+
+        string HeroTitle(Snapshot s)
+        {
+            if (s.State == "Problem") return "需要处理";
+            if (s.State == "Working") return "OpenClaw 正在工作";
+            if (s.State == "Ready") return "OpenClaw 已就绪";
+            return "OpenClaw 当前安静";
+        }
+
+        string HeroDetail(Snapshot s)
+        {
+            if (s.State == "Problem")
+            {
+                if (!s.GatewayOk) return "监控面板连不上网关。请检查 WSL 或 OpenClaw gateway。";
+                if (!s.TelegramOk) return "网关可连接，但 Telegram 未连接或未配置。";
+                if (s.AuditErrors > 0) return "任务审计有错误。请查看提醒和日志。";
+                return "有项目需要处理。";
+            }
+            if (s.State == "Working") return "检测到后台任务或活跃 TaskFlow。可以在下方表格看进展。";
+            if (s.State == "Ready") return "网关和 Telegram 已连接；后台没有 queued/running 任务，也没有活跃 TaskFlow。";
+            return "后台没有 queued/running 任务，也没有活跃 TaskFlow。";
+        }
+
+        Color HeroColor(Snapshot s)
+        {
+            if (s.State == "Problem") return Color.FromArgb(238, 96, 96);
+            if (s.State == "Working") return Color.FromArgb(86, 160, 220);
+            if (s.State == "Ready") return Color.FromArgb(84, 190, 130);
+            return Color.FromArgb(229, 176, 75);
+        }
+
+        string DisplayState(string state)
+        {
+            if (state == "Problem") return "需要处理";
+            if (state == "Working") return "正在工作";
+            if (state == "Ready") return "就绪";
+            return "空闲";
+        }
+
+        static string TranslateTaskStatus(string status)
+        {
+            var key = (status ?? "").Trim().ToLowerInvariant();
+            if (key == "running") return "运行中";
+            if (key == "pending") return "等待中";
+            if (key == "queued") return "排队中";
+            if (key == "complete" || key == "completed" || key == "done") return "已完成";
+            if (key == "failed" || key == "error") return "失败";
+            if (key == "cancelled" || key == "canceled") return "已取消";
+            return string.IsNullOrWhiteSpace(status) ? "-" : status;
+        }
+
+        static string TranslateLogLevel(string level)
+        {
+            var key = (level ?? "").Trim().ToLowerInvariant();
+            if (key == "error") return "错误";
+            if (key == "warn" || key == "warning") return "提醒";
+            if (key == "info") return "信息";
+            if (key == "debug") return "调试";
+            return string.IsNullOrWhiteSpace(level) ? "-" : level.ToUpperInvariant();
+        }
+
+        static string TranslateSubsystem(string subsystem)
+        {
+            var key = subsystem ?? "";
+            if (key.Contains("gateway/channels/telegram")) return "Telegram 通道";
+            if (key.Contains("diagnostic")) return "诊断";
+            if (key.Contains("gateway")) return "网关";
+            if (key.Contains("telegram")) return "Telegram";
+            return key;
+        }
+
+        void SetCard(Card card, string state)
+        {
+            if (state == "good") card.Value.ForeColor = Color.FromArgb(84, 190, 130);
+            else if (state == "bad") card.Value.ForeColor = Color.FromArgb(238, 96, 96);
+            else if (state == "warn") card.Value.ForeColor = Color.FromArgb(229, 176, 75);
+            else if (state == "work") card.Value.ForeColor = Color.FromArgb(86, 160, 220);
+            else card.Value.ForeColor = Color.White;
+        }
+
+        static Dictionary<string, object> AsDict(object value)
+        {
+            return value as Dictionary<string, object> ?? new Dictionary<string, object>();
+        }
+
+        static ArrayList AsList(object value)
+        {
+            if (value is ArrayList) return (ArrayList)value;
+            var array = value as object[];
+            if (array != null)
+            {
+                var list = new ArrayList();
+                list.AddRange(array);
+                return list;
+            }
+            var enumerable = value as IEnumerable;
+            if (enumerable != null && !(value is string))
+            {
+                var list = new ArrayList();
+                foreach (var item in enumerable) list.Add(item);
+                return list;
+            }
+            return new ArrayList();
+        }
+
+        static object Get(Dictionary<string, object> dict, string key)
+        {
+            if (dict == null) return null;
+            object value;
+            return dict.TryGetValue(key, out value) ? value : null;
+        }
+
+        static object First(ArrayList list)
+        {
+            return list != null && list.Count > 0 ? list[0] : null;
+        }
+
+        static bool ToBool(object value)
+        {
+            if (value is bool) return (bool)value;
+            bool parsed;
+            return bool.TryParse(Convert.ToString(value), out parsed) && parsed;
+        }
+
+        static long ToLong(object value)
+        {
+            if (value == null) return -1;
+            try { return Convert.ToInt64(value); } catch { return -1; }
+        }
+
+        static string AgeSince(long epochMs)
+        {
+            if (epochMs <= 0) return "-";
+            var dt = DateTimeOffset.FromUnixTimeMilliseconds(epochMs).LocalDateTime;
+            return Age((long)Math.Max(0, (DateTime.Now - dt).TotalMilliseconds));
+        }
+
+        static string Age(long ms)
+        {
+            if (ms < 0) return "-";
+            if (ms < 1000) return ms + "毫秒";
+            var sec = ms / 1000;
+            if (sec < 60) return sec + "秒";
+            var min = sec / 60;
+            if (min < 60) return min + "分";
+            var hr = min / 60;
+            if (hr < 48) return hr + "小时";
+            return (hr / 24) + "天";
+        }
+
+        static string FormatTokens(long value)
+        {
+            if (value <= 0) return "-";
+            if (value >= 1000000) return (value / 1000000d).ToString("0.#") + "M";
+            if (value >= 1000) return (value / 1000d).ToString("0.#") + "K";
+            return value.ToString();
+        }
+
+        static string Trim(string text, int max)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= max) return text ?? "";
+            return text.Substring(0, Math.Max(0, max - 3)) + "...";
+        }
+
+        static string Pad(string text, int width)
+        {
+            text = text ?? "";
+            return text.Length >= width ? text : text + new string(' ', width - text.Length);
+        }
+    }
+
+    sealed class Card
+    {
+        public RoundedPanel Panel { get; private set; }
+        public Label Value { get; private set; }
+
+        public Card(string title, int x, int y, int w, int h)
+        {
+            Panel = new RoundedPanel
+            {
+                Location = new Point(x, y),
+                Size = new Size(w, h),
+                BackColor = Color.White,
+                BorderColor = Color.FromArgb(226, 232, 240),
+                Radius = 16
+            };
+            var titleLabel = new Label
+            {
+                Text = title,
+                Location = new Point(12, 10),
+                Size = new Size(w - 24, 22),
+                ForeColor = Color.FromArgb(100, 116, 139),
+                Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold),
+                BackColor = Color.Transparent
+            };
+            Value = new Label
+            {
+                Text = "-",
+                Location = new Point(12, 38),
+                Size = new Size(w - 24, h - 44),
+                ForeColor = Color.FromArgb(15, 23, 42),
+                Font = new Font("Microsoft YaHei UI", 15f, FontStyle.Bold),
+                BackColor = Color.Transparent
+            };
+            Panel.Controls.Add(titleLabel);
+            Panel.Controls.Add(Value);
+        }
+    }
+
+    sealed class RoundedPanel : Panel
+    {
+        public int Radius { get; set; }
+        public Color BorderColor { get; set; }
+
+        public RoundedPanel()
+        {
+            Radius = 14;
+            BorderColor = Color.FromArgb(226, 232, 240);
+            DoubleBuffered = true;
+            Padding = new Padding(1);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var path = RoundedRect(new Rectangle(0, 0, Width - 1, Height - 1), Radius))
+            using (var brush = new SolidBrush(BackColor))
+            using (var pen = new Pen(BorderColor))
+            {
+                e.Graphics.FillPath(brush, path);
+                e.Graphics.DrawPath(pen, path);
+            }
+        }
+
+        static GraphicsPath RoundedRect(Rectangle bounds, int radius)
+        {
+            var diameter = radius * 2;
+            var path = new GraphicsPath();
+            path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Y, diameter, diameter, 270, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(bounds.X, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+    }
+
+    static class EnumerableCompat
+    {
+        public static IEnumerable<T> TakeLastCompat<T>(this IEnumerable<T> source, int count)
+        {
+            var queue = new Queue<T>();
+            foreach (var item in source)
+            {
+                queue.Enqueue(item);
+                while (queue.Count > count) queue.Dequeue();
+            }
+            return queue.ToArray();
+        }
+    }
+}
