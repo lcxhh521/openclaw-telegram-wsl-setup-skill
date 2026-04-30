@@ -131,6 +131,7 @@ namespace OpenClawLocalMonitor
         public DateTime GeneratedAt = DateTime.Now;
         public string State = "Idle";
         public bool GatewayOk;
+        public bool GatewaySoftFailure;
         public bool TelegramOk;
         public int RunningTasks;
         public int AuditWarnings;
@@ -177,6 +178,7 @@ namespace OpenClawLocalMonitor
         readonly object costLock = new object();
         CostSummary cachedCost = new CostSummary();
         bool refreshing;
+        int gatewayProbeFailures;
         ClosePreference closePreference = ClosePreference.Ask;
 
         Label updated;
@@ -501,7 +503,7 @@ namespace OpenClawLocalMonitor
 
         Snapshot BuildSnapshot()
         {
-            var probeTask = Task.Run(() => RunOpenClawJson(new[] { "gateway", "probe", "--json" }, 35000));
+            var probeTask = Task.Run(() => RunOpenClawJson(new[] { "gateway", "probe", "--json", "--timeout", "30000" }, 45000));
             var statusTask = Task.Run(() => RunOpenClawJson(new[] { "status", "--json" }, 35000));
             var tasksTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "list", "--json" }, 35000));
             var flowsTask = Task.Run(() => RunOpenClawText(new[] { "tasks", "flow", "list" }, 35000));
@@ -519,13 +521,26 @@ namespace OpenClawLocalMonitor
             var snapshot = new Snapshot();
             if (!probe.Item1)
             {
+                gatewayProbeFailures++;
                 snapshot.Error = probe.Item3;
-                snapshot.State = "Problem";
-                snapshot.GatewayText = "探针失败";
-                snapshot.StatusLine = probe.Item3;
+                var serviceLooksAlive = StatusShowsGatewayServiceRunning(status.Item2) || status.Item1 || taskData.Item1 || auditData.Item1;
+                if (serviceLooksAlive && gatewayProbeFailures < 3)
+                {
+                    snapshot.State = "Degraded";
+                    snapshot.GatewayText = "探针不稳定";
+                    snapshot.GatewaySoftFailure = true;
+                    snapshot.StatusLine = "本轮 gateway 探针超时，但 OpenClaw 服务仍有响应；面板会继续自动重试。";
+                }
+                else
+                {
+                    snapshot.State = "Problem";
+                    snapshot.GatewayText = "探针失败";
+                    snapshot.StatusLine = string.IsNullOrWhiteSpace(probe.Item3) ? "gateway 探针连续失败。" : probe.Item3;
+                }
             }
             else
             {
+                gatewayProbeFailures = 0;
                 FillFromProbe(snapshot, probe.Item2);
             }
             FillTokenUsage(snapshot, status.Item2);
@@ -535,13 +550,24 @@ namespace OpenClawLocalMonitor
             FillAudit(snapshot, auditData.Item2);
             FillLogs(snapshot, logs);
 
-            if ((snapshot.RunningTasks > 0 || snapshot.FlowActive > 0 || snapshot.FlowBlocked > 0 || snapshot.FlowCancelRequested > 0) && snapshot.State != "Problem")
+            if ((snapshot.RunningTasks > 0 || snapshot.FlowActive > 0 || snapshot.FlowBlocked > 0 || snapshot.FlowCancelRequested > 0) && snapshot.State != "Problem" && snapshot.State != "Degraded")
                 snapshot.State = "Working";
 
             snapshot.StatusLine = string.IsNullOrWhiteSpace(snapshot.StatusLine)
                 ? snapshot.GatewayText + " | 只读 | 每 12 秒刷新"
                 : snapshot.StatusLine;
             return snapshot;
+        }
+
+        bool StatusShowsGatewayServiceRunning(object statusObj)
+        {
+            var status = AsDict(statusObj);
+            var service = AsDict(Get(status, "gatewayService"));
+            var runtime = AsDict(Get(service, "runtime"));
+            var statusText = Convert.ToString(Get(runtime, "status")) ?? "";
+            var stateText = Convert.ToString(Get(runtime, "state")) ?? "";
+            return statusText.Equals("running", StringComparison.OrdinalIgnoreCase)
+                || stateText.Equals("active", StringComparison.OrdinalIgnoreCase);
         }
 
         void FillFromProbe(Snapshot s, object probeObj)
@@ -907,7 +933,7 @@ namespace OpenClawLocalMonitor
             overall.Value.Text = DisplayState(s.State);
             SetCard(overall, s.State == "Problem" ? "bad" : s.State == "Working" ? "work" : s.State == "Ready" ? "good" : "warn");
             gateway.Value.Text = s.GatewayText;
-            SetCard(gateway, s.GatewayOk ? "good" : "bad");
+            SetCard(gateway, s.GatewayOk ? "good" : s.GatewaySoftFailure ? "warn" : "bad");
             telegram.Value.Text = s.TelegramText;
             SetCard(telegram, s.TelegramOk ? "good" : "bad");
             var backgroundTotal = s.RunningTasks + s.FlowActive + s.FlowBlocked + s.FlowCancelRequested;
@@ -949,6 +975,7 @@ namespace OpenClawLocalMonitor
         string HeroTitle(Snapshot s)
         {
             if (s.State == "Problem") return "需要处理";
+            if (s.State == "Degraded") return "探针不稳定";
             if (s.State == "Working") return "OpenClaw 正在工作";
             if (s.State == "Ready") return "OpenClaw 已就绪";
             return "OpenClaw 当前安静";
@@ -963,6 +990,7 @@ namespace OpenClawLocalMonitor
                 if (s.AuditErrors > 0) return "任务审计有错误。请查看提醒和日志。";
                 return "有项目需要处理。";
             }
+            if (s.State == "Degraded") return "OpenClaw 服务仍有响应，但本轮 gateway 探针超时。面板会自动重试，连续失败才标红。";
             if (s.State == "Working") return "检测到后台任务或活跃 TaskFlow。可以在下方表格看进展。";
             if (s.State == "Ready") return "网关和 Telegram 已连接；后台没有 queued/running 任务，也没有活跃 TaskFlow。";
             return "后台没有 queued/running 任务，也没有活跃 TaskFlow。";
@@ -971,6 +999,7 @@ namespace OpenClawLocalMonitor
         Color HeroColor(Snapshot s)
         {
             if (s.State == "Problem") return Color.FromArgb(238, 96, 96);
+            if (s.State == "Degraded") return Color.FromArgb(229, 176, 75);
             if (s.State == "Working") return Color.FromArgb(86, 160, 220);
             if (s.State == "Ready") return Color.FromArgb(84, 190, 130);
             return Color.FromArgb(229, 176, 75);
@@ -979,6 +1008,7 @@ namespace OpenClawLocalMonitor
         string DisplayState(string state)
         {
             if (state == "Problem") return "需要处理";
+            if (state == "Degraded") return "需观察";
             if (state == "Working") return "正在工作";
             if (state == "Ready") return "就绪";
             return "空闲";
