@@ -176,6 +176,7 @@ namespace OpenClawLocalMonitor
         readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 100 };
         readonly Timer timer = new Timer();
         readonly object costLock = new object();
+        readonly long monitorStartedAtMs = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
         CostSummary cachedCost = new CostSummary();
         bool refreshing;
         int gatewayProbeFailures;
@@ -801,11 +802,38 @@ namespace OpenClawLocalMonitor
         void FillAudit(Snapshot s, object auditObj)
         {
             var audit = AsDict(auditObj);
-            var summary = AsDict(Get(audit, "summary"));
-            var combined = AsDict(Get(summary, "combined"));
-            s.AuditWarnings = (int)Math.Max(0, ToLong(Get(combined, "warnings")));
-            s.AuditErrors = (int)Math.Max(0, ToLong(Get(combined, "errors")));
+            var findings = AsList(Get(audit, "findings"));
+            var warnings = 0;
+            var errors = 0;
+            foreach (var findingObj in findings)
+            {
+                var finding = AsDict(findingObj);
+                var findingTimeMs = AuditFindingTimestampMs(finding);
+                if (findingTimeMs > 0 && findingTimeMs < monitorStartedAtMs) continue;
+
+                var severity = (Convert.ToString(Get(finding, "severity")) ?? "").Trim().ToLowerInvariant();
+                if (severity == "error") errors++;
+                else if (severity == "warn" || severity == "warning") warnings++;
+            }
+
+            s.AuditWarnings = warnings;
+            s.AuditErrors = errors;
             if (s.AuditErrors > 0) s.State = "Problem";
+        }
+
+        long AuditFindingTimestampMs(Dictionary<string, object> finding)
+        {
+            var task = AsDict(Get(finding, "task"));
+            var flow = AsDict(Get(finding, "flow"));
+            var timestamp = Math.Max(
+                Math.Max(ToLong(Get(task, "lastEventAt")), ToLong(Get(task, "endedAt"))),
+                Math.Max(ToLong(Get(flow, "updatedAt")), ToLong(Get(flow, "endedAt"))));
+            timestamp = Math.Max(timestamp, Math.Max(ToLong(Get(task, "startedAt")), ToLong(Get(flow, "createdAt"))));
+            timestamp = Math.Max(timestamp, Math.Max(ToLong(Get(task, "createdAt")), ToLong(Get(finding, "updatedAt"))));
+            var ageMs = ToLong(Get(finding, "ageMs"));
+            if (timestamp <= 0 && ageMs >= 0)
+                timestamp = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds - ageMs;
+            return timestamp;
         }
 
         void FillLogs(Snapshot s, List<Dictionary<string, object>> logs)
