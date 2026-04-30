@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -154,6 +155,9 @@ namespace OpenClawLocalMonitor
         public int FlowActive;
         public int FlowBlocked;
         public int FlowCancelRequested;
+        public int LocalWorkItems;
+        public bool LocalDaemonActive;
+        public string LocalWorkAge = "-";
         public readonly List<string[]> Tasks = new List<string[]>();
         public readonly List<string> Sessions = new List<string>();
         public readonly List<string> Logs = new List<string>();
@@ -510,7 +514,8 @@ namespace OpenClawLocalMonitor
             var flowsTask = Task.Run(() => RunOpenClawText(new[] { "tasks", "flow", "list" }, 35000));
             var auditTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "audit", "--json" }, 35000));
             var logsTask = Task.Run(() => RunLogs());
-            Task.WaitAll(probeTask, statusTask, tasksTask, flowsTask, auditTask, logsTask);
+            var workspaceTask = Task.Run(() => RunWorkspaceActivity());
+            Task.WaitAll(probeTask, statusTask, tasksTask, flowsTask, auditTask, logsTask, workspaceTask);
 
             var probe = probeTask.Result;
             var status = statusTask.Result;
@@ -518,6 +523,7 @@ namespace OpenClawLocalMonitor
             var flowData = flowsTask.Result;
             var auditData = auditTask.Result;
             var logs = logsTask.Result;
+            var workspaceActivity = workspaceTask.Result;
 
             var snapshot = new Snapshot();
             if (!probe.Item1)
@@ -548,10 +554,11 @@ namespace OpenClawLocalMonitor
             FillCostUsage(snapshot);
             FillTasks(snapshot, taskData.Item2);
             FillFlows(snapshot, flowData);
+            FillWorkspaceActivity(snapshot, workspaceActivity);
             FillAudit(snapshot, auditData.Item2);
             FillLogs(snapshot, logs);
 
-            if ((snapshot.RunningTasks > 0 || snapshot.FlowActive > 0 || snapshot.FlowBlocked > 0 || snapshot.FlowCancelRequested > 0) && snapshot.State != "Problem" && snapshot.State != "Degraded")
+            if ((snapshot.RunningTasks > 0 || snapshot.FlowActive > 0 || snapshot.FlowBlocked > 0 || snapshot.FlowCancelRequested > 0 || snapshot.LocalWorkItems > 0) && snapshot.State != "Problem" && snapshot.State != "Degraded")
                 snapshot.State = "Working";
 
             snapshot.StatusLine = string.IsNullOrWhiteSpace(snapshot.StatusLine)
@@ -899,6 +906,68 @@ namespace OpenClawLocalMonitor
             return items;
         }
 
+        Tuple<bool, string, string> RunWorkspaceActivity()
+        {
+            var script =
+                "cd \"$HOME/.openclaw/workspace\" 2>/dev/null || exit 0\n" +
+                "pidfile=\"memory/continuous-task-status/steinsgate-kurisu.pid\"\n" +
+                "if [ -f \"$pidfile\" ]; then pid=$(tr -dc '0-9' < \"$pidfile\" 2>/dev/null); if [ -n \"$pid\" ] && ps -p \"$pid\" >/dev/null 2>&1; then args=$(ps -p \"$pid\" -o args= 2>/dev/null | cut -c1-160); echo \"DAEMON\t$pid\t$args\"; fi; fi\n" +
+                "find steinsgate memory/continuous-task-status -maxdepth 1 -type f \\( -name 'material_coverage_rotation*.md' -o -name 'material_coverage_rotation*.json' -o -name 'learning_synthesis_visible*.md' -o -name 'learning_synthesis_visible*.json' -o -name 'audio_performance_aux_notes_batch*.md' -o -name 'audio_performance_aux_notes_batch*.json' -o -name 'steinsgate-kurisu.json' \\) -mmin -120 -printf 'ARTIFACT\\t%T@\\t%p\\n' 2>/dev/null | sort -k2,2nr | head -12\n";
+            var result = RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", script }, 15000);
+            return Tuple.Create(result.Ok, result.Stdout, result.Stderr + result.Error);
+        }
+
+        void FillWorkspaceActivity(Snapshot s, Tuple<bool, string, string> data)
+        {
+            if (data == null || !data.Item1 || string.IsNullOrWhiteSpace(data.Item2)) return;
+
+            var artifactRows = 0;
+            long latestArtifactMs = 0;
+            foreach (var line in data.Item2.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split(new[] { '\t' }, 3);
+                if (parts.Length >= 2 && parts[0] == "DAEMON")
+                {
+                    s.LocalDaemonActive = true;
+                    s.LocalWorkItems = Math.Max(s.LocalWorkItems, 1);
+                    var pid = parts[1];
+                    var detail = parts.Length >= 3 ? Trim(parts[2], 70) : "";
+                    s.Tasks.Add(new[] { "本地学习 daemon", "本地进程", "运行中", "-", "PID " + pid + (string.IsNullOrWhiteSpace(detail) ? "" : " · " + detail) });
+                    continue;
+                }
+
+                if (parts.Length >= 3 && parts[0] == "ARTIFACT")
+                {
+                    double seconds = 0;
+                    if (double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out seconds))
+                        latestArtifactMs = Math.Max(latestArtifactMs, (long)(seconds * 1000));
+
+                    if (artifactRows < 6)
+                    {
+                        var name = Path.GetFileName(parts[2]);
+                        s.Tasks.Add(new[] { Trim(name, 42), "本地产物", "刚产出", AgeSince((long)(seconds * 1000)), "工作区产物心跳" });
+                        artifactRows++;
+                    }
+                }
+            }
+
+            if (artifactRows > 0)
+            {
+                s.LocalWorkItems = Math.Max(s.LocalWorkItems, 1);
+                s.LocalWorkAge = AgeSince(latestArtifactMs);
+                var label = s.LocalDaemonActive ? "本地 daemon + 产物心跳" : "本地产物心跳";
+                s.StatusLine = string.IsNullOrWhiteSpace(s.StatusLine)
+                    ? label + " " + s.LocalWorkAge
+                    : s.StatusLine + " | " + label + " " + s.LocalWorkAge;
+            }
+            else if (s.LocalDaemonActive)
+            {
+                s.StatusLine = string.IsNullOrWhiteSpace(s.StatusLine)
+                    ? "本地 daemon 运行中"
+                    : s.StatusLine + " | 本地 daemon 运行中";
+            }
+        }
+
         string BashCommand(string[] args)
         {
             var parts = new List<string> { OpenClawCommand };
@@ -964,7 +1033,8 @@ namespace OpenClawLocalMonitor
             SetCard(gateway, s.GatewayOk ? "good" : s.GatewaySoftFailure ? "warn" : "bad");
             telegram.Value.Text = s.TelegramText;
             SetCard(telegram, s.TelegramOk ? "good" : "bad");
-            var backgroundTotal = s.RunningTasks + s.FlowActive + s.FlowBlocked + s.FlowCancelRequested;
+            var registeredWork = Math.Max(s.RunningTasks, s.FlowActive);
+            var backgroundTotal = registeredWork + s.FlowBlocked + s.FlowCancelRequested + s.LocalWorkItems;
             tasks.Value.Text = backgroundTotal.ToString();
             SetCard(tasks, backgroundTotal > 0 ? "work" : "good");
             audit.Value.Text = s.AuditWarnings + " 提醒 / " + s.AuditErrors + " 错误";
@@ -1019,9 +1089,9 @@ namespace OpenClawLocalMonitor
                 return "有项目需要处理。";
             }
             if (s.State == "Degraded") return "OpenClaw 服务仍有响应，但本轮 gateway 探针超时。面板会自动重试，连续失败才标红。";
-            if (s.State == "Working") return "检测到后台任务或活跃 TaskFlow。可以在下方表格看进展。";
-            if (s.State == "Ready") return "网关和 Telegram 已连接；后台没有 queued/running 任务，也没有活跃 TaskFlow。";
-            return "后台没有 queued/running 任务，也没有活跃 TaskFlow。";
+            if (s.State == "Working") return "检测到 OpenClaw 注册任务、TaskFlow 或本地产物心跳。可以在下方表格看进展。";
+            if (s.State == "Ready") return "网关和 Telegram 已连接；后台没有 queued/running 任务、活跃 TaskFlow 或本地产物心跳。";
+            return "后台没有 queued/running 任务、活跃 TaskFlow 或本地产物心跳。";
         }
 
         Color HeroColor(Snapshot s)

@@ -222,7 +222,7 @@ Codex may be able to infer and run the right install commands from the current e
    - The monitor is read-only and should not store tokens, auth profiles, logs, or raw OpenClaw config.
    - Build it locally on Windows from source; do not download or run third-party binaries.
    - Install it to a user-local path such as `%LOCALAPPDATA%\OpenClawMonitor`, create a Startup-folder shortcut, and start it as a tray-capable app.
-   - Explain its strict backend-task meaning: the "后台任务" count should only come from `queued/running` tasks plus active/blocked/cancel-requested TaskFlow pressure. Recent Telegram/session activity is only context and must not be presented as a running background task.
+   - Explain its backend-work meaning: the "后台任务" count should come from `queued/running` tasks, active/blocked/cancel-requested TaskFlow pressure, and clearly labeled local daemon/workspace artifact heartbeat. Recent Telegram/session activity is only context and must not be presented as a running background task by itself.
    - Verify the panel opens and can be minimized/closed to the system tray.
 
 12. If the user wants local audio recognition through Doubao/Volcengine, install or verify the helper in `tools/openclaw-doubao-asr`.
@@ -839,8 +839,8 @@ The panel is a user-local, read-only Windows utility. It should help the user an
 
 Important semantics:
 
-- "后台任务" means strict backend work only: `openclaw tasks list --json` entries with `status=queued` or `status=running`, plus TaskFlow pressure from `openclaw tasks flow list` where active/blocked/cancel-requested is nonzero.
-- Recent Telegram messages, recently updated sessions, or token growth are not enough to say a background task is running. Show them only as context.
+- "后台任务" means real backend work: `openclaw tasks list --json` entries with `status=queued` or `status=running`, TaskFlow pressure from `openclaw tasks flow list` where active/blocked/cancel-requested is nonzero, plus clearly labeled local daemon/workspace artifact heartbeat when OpenClaw is producing local learning artifacts outside the task registry.
+- Recent Telegram messages, recently updated sessions, or token growth are not enough to say a background task is running. Show them only as context unless there is also a task, TaskFlow pressure, daemon, or artifact heartbeat.
 - Cost shown in the panel is OpenClaw's local recorded/estimated `usage.cost` from session logs. It helps explain model spend direction, but it is not a provider invoice and must not be described as guaranteed billing truth.
 - The panel must stay read-only. It must not edit OpenClaw config, auth profiles, tokens, provider keys, channel settings, or gateway service files.
 - The panel must not print or store secrets.
@@ -874,7 +874,7 @@ OpenClaw command: openclaw is available on the WSL login-shell PATH
 Gateway URL: ws://127.0.0.1:18789
 ```
 
-If the monitor shows no backend task while OpenClaw recently replied in Telegram, explain that these are different signals: the backend task table is authoritative for queued/running tasks, while Telegram/session recency is only activity context.
+If the monitor shows no backend task while OpenClaw recently replied in Telegram, explain that these are different signals: queued/running tasks and TaskFlow are authoritative for registered work; local daemon/artifact heartbeat is evidence of local productive work; Telegram/session recency alone is only activity context.
 
 ## Doubao / Volcengine ASR Helper
 
