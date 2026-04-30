@@ -180,8 +180,13 @@ namespace OpenClawLocalMonitor
         readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 100 };
         readonly Timer timer = new Timer();
         readonly object costLock = new object();
+        readonly object artifactLock = new object();
         readonly long monitorStartedAtMs = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
+        readonly long activeTaskEventWindowMs = 20L * 60L * 1000L;
+        readonly long freshTaskEventWindowMs = 2L * 60L * 1000L;
+        Dictionary<string, long> previousArtifactMtimes = new Dictionary<string, long>();
         CostSummary cachedCost = new CostSummary();
+        bool artifactBaselineReady;
         bool refreshing;
         int gatewayProbeFailures;
         ClosePreference closePreference = ClosePreference.Ask;
@@ -759,9 +764,19 @@ namespace OpenClawLocalMonitor
             {
                 var label = Convert.ToString(Get(row, "label") ?? Get(row, "taskId") ?? "任务");
                 var runtime = Convert.ToString(Get(row, "runtime") ?? "-");
-                var status = TranslateTaskStatus(Convert.ToString(Get(row, "status") ?? "-"));
+                var rawStatus = Convert.ToString(Get(row, "status") ?? "-");
+                var status = TranslateTaskStatus(rawStatus);
                 var created = AgeSince(ToLong(Get(row, "createdAt")));
-                var last = AgeSince(ToLong(Get(row, "lastEventAt")));
+                var lastEventAt = ToLong(Get(row, "lastEventAt"));
+                var last = AgeSince(lastEventAt);
+                var lastAgeMs = MillisecondsSince(lastEventAt);
+                if (lastAgeMs <= freshTaskEventWindowMs)
+                    last += " · 活跃";
+                else if (lastAgeMs > activeTaskEventWindowMs)
+                {
+                    status += "（静默）";
+                    last += " · 事件偏旧";
+                }
                 s.Tasks.Add(new[] { Trim(label, 42), runtime, status, created, last });
             }
         }
@@ -1032,6 +1047,7 @@ namespace OpenClawLocalMonitor
 
             var artifactRows = 0;
             long latestArtifactMs = 0;
+            var currentArtifacts = new Dictionary<string, long>();
             foreach (var line in data.Item2.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 var parts = line.Split(new[] { '\t' }, 3);
@@ -1049,17 +1065,49 @@ namespace OpenClawLocalMonitor
                 {
                     double seconds = 0;
                     if (double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out seconds))
-                        latestArtifactMs = Math.Max(latestArtifactMs, (long)(seconds * 1000));
+                    {
+                        var artifactMs = (long)(seconds * 1000);
+                        latestArtifactMs = Math.Max(latestArtifactMs, artifactMs);
+                        currentArtifacts[parts[2]] = artifactMs;
+                    }
 
                     artifactRows++;
                 }
             }
 
+            var changedArtifacts = new List<Tuple<string, long>>();
+            lock (artifactLock)
+            {
+                if (artifactBaselineReady)
+                {
+                    foreach (var item in currentArtifacts)
+                    {
+                        long previous;
+                        if (!previousArtifactMtimes.TryGetValue(item.Key, out previous) || item.Value > previous + 500)
+                            changedArtifacts.Add(Tuple.Create(item.Key, item.Value));
+                    }
+                }
+                previousArtifactMtimes = currentArtifacts;
+                artifactBaselineReady = true;
+            }
+
+            foreach (var item in changedArtifacts.OrderByDescending(x => x.Item2).Take(4))
+            {
+                var name = Path.GetFileName(item.Item1);
+                s.Tasks.Add(new[] { Trim(name, 42), "产物写入", "刚更新", AgeSince(item.Item2), "连续刷新检测到写入" });
+            }
+
             if (artifactRows > 0)
             {
                 s.LocalWorkAge = AgeSince(latestArtifactMs);
-                var label = s.LocalDaemonActive ? "本地 daemon + 最近产物" : "最近产物";
-                var suffix = s.LocalDaemonActive ? "" : "（不计为正在运行任务）";
+                if (changedArtifacts.Count > 0)
+                    s.LocalWorkItems = Math.Max(s.LocalWorkItems, 1);
+                var label = changedArtifacts.Count > 0
+                    ? "检测到产物写入"
+                    : s.LocalDaemonActive ? "本地 daemon + 最近产物" : "最近产物";
+                var suffix = changedArtifacts.Count > 0
+                    ? ""
+                    : s.LocalDaemonActive ? "" : "（不计为正在运行任务）";
                 s.StatusLine = string.IsNullOrWhiteSpace(s.StatusLine)
                     ? label + " " + s.LocalWorkAge + suffix
                     : s.StatusLine + " | " + label + " " + s.LocalWorkAge + suffix;
@@ -1189,7 +1237,7 @@ namespace OpenClawLocalMonitor
                 return "有项目需要处理。";
             }
             if (s.State == "Degraded") return "OpenClaw 服务仍有响应，但本轮 gateway 探针超时。面板会自动重试，连续失败才标红。";
-            if (s.State == "Working") return "检测到 OpenClaw 注册任务、活跃 TaskFlow 或仍在运行的本地 daemon。可以在下方表格看进展。";
+            if (s.State == "Working") return "检测到 OpenClaw 注册任务、活跃 TaskFlow、仍在运行的本地 daemon，或连续刷新之间的新产物写入。可以在下方表格看进展。";
             if (s.State == "Ready") return "网关和 Telegram 已连接；后台没有 queued/running 任务、活跃 TaskFlow 或仍在运行的本地 daemon。";
             return "后台没有 queued/running 任务、活跃 TaskFlow 或仍在运行的本地 daemon。";
         }
@@ -1368,6 +1416,12 @@ namespace OpenClawLocalMonitor
             if (epochMs <= 0) return "-";
             var dt = DateTimeOffset.FromUnixTimeMilliseconds(epochMs).LocalDateTime;
             return Age((long)Math.Max(0, (DateTime.Now - dt).TotalMilliseconds));
+        }
+
+        static long MillisecondsSince(long epochMs)
+        {
+            if (epochMs <= 0) return long.MaxValue;
+            return Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - epochMs);
         }
 
         static string Age(long ms)
