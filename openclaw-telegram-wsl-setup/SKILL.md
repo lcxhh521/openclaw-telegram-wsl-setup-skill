@@ -225,12 +225,20 @@ Codex may be able to infer and run the right install commands from the current e
    - Explain its strict backend-task meaning: the "后台任务" count should only come from `queued/running` tasks plus active/blocked/cancel-requested TaskFlow pressure. Recent Telegram/session activity is only context and must not be presented as a running background task.
    - Verify the panel opens and can be minimized/closed to the system tray.
 
-12. Configure Telegram using a local token prompt or token file.
+12. If the user wants local audio recognition through Doubao/Volcengine, install or verify the helper in `tools/openclaw-doubao-asr`.
+   - Treat this as a separate ASR adapter, not as model routing.
+   - Doubao text models can analyze transcripts; Ark chat models should not be described as native local-audio listeners unless the current provider docs prove that exact audio path works.
+   - The Volcengine recording-file ASR path needs a speech resource, usually `volc.bigasr.auc_turbo`, in addition to the general API key.
+   - Store keys only through a local terminal prompt or existing `~/.openclaw/secrets/volcengine.env`; never ask the user to paste keys into chat.
+   - The helper may run `openclaw-doubao-asr --self-check` without uploading audio.
+   - Before transcribing a real local audio file, confirm with the user that the selected audio will be uploaded to Volcengine.
+
+13. Configure Telegram using a local token prompt or token file.
    - Guide the user through BotFather in Telegram if they do not already have a bot.
    - Token entry happens only in the local terminal prompt, never in chat.
    - Close token-entry windows after `openclaw channels status --json --timeout 30000` shows the token/config is available, unless the window is also the active gateway/keepalive path.
 
-13. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
+14. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
    - Explain the 60-120 second startup window.
    - Ask for a fresh message only after Telegram is ready or the startup grace period has passed.
    - Close successful setup windows after end-to-end Telegram reply verification, leaving only intentional hidden/minimized keepalive infrastructure.
@@ -867,6 +875,67 @@ Gateway URL: ws://127.0.0.1:18789
 ```
 
 If the monitor shows no backend task while OpenClaw recently replied in Telegram, explain that these are different signals: the backend task table is authoritative for queued/running tasks, while Telegram/session recency is only activity context.
+
+## Doubao / Volcengine ASR Helper
+
+Use this section when the user wants OpenClaw to process local audio through Doubao/Volcengine, especially after a Gemini audio path is unavailable or too limited.
+
+Keep the model boundary clear:
+
+- Doubao text models are useful for transcript analysis, taxonomy review, tone/style summaries, and fallback reasoning.
+- Ark chat model calls are not a reliable substitute for native audio understanding unless the current provider explicitly supports that input shape.
+- Volcengine recording-file ASR is a speech endpoint. It needs an enabled ASR resource such as `volc.bigasr.auc_turbo`; a general API key alone may only prove text models work.
+- Gemini can still be used for native audio understanding when the task needs more than transcription.
+
+When this skill bundle includes:
+
+```text
+tools/openclaw-doubao-asr/
+```
+
+install the local helper from Windows PowerShell:
+
+```powershell
+cd .\openclaw-telegram-wsl-setup\tools\openclaw-doubao-asr
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-DoubaoAsrTool.ps1
+```
+
+The installer should:
+
+1. Copy `openclaw-doubao-asr` into `~/.local/bin` inside Ubuntu.
+2. Add non-secret ASR defaults to `~/.openclaw/secrets/volcengine.env`:
+   - `VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`
+   - `VOLCENGINE_ASR_ENDPOINT=https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash`
+   - `VOLCENGINE_ASR_MODEL_NAME=bigmodel`
+3. Preserve existing key variables and never print them.
+4. Run `openclaw-doubao-asr --self-check`.
+
+For key handling:
+
+- Reuse the existing Volcengine key only if it is already saved locally.
+- If a key is missing, open a local terminal prompt. Do not ask the user to paste it into chat.
+- Prefer `VOLCANO_ENGINE_API_KEY` for OpenClaw's Volcengine provider compatibility, and allow ASR-specific aliases such as `VOLCENGINE_ASR_API_KEY`.
+
+Before running an actual transcription command, explain and confirm the data transfer:
+
+```text
+This will upload <audio path> to Volcengine for ASR. Continue?
+```
+
+Only after the user approves, run:
+
+```bash
+openclaw-doubao-asr /path/to/audio.wav --output result.json
+openclaw-doubao-asr --text-only /path/to/audio.wav
+```
+
+If self-check passes but transcription fails:
+
+- Check whether the Volcengine project has the big-model recording-file ASR resource enabled.
+- Check whether the key belongs to the project that owns the ASR resource.
+- Check account quota or billing status.
+- Check whether the audio file is too large; use smaller clips for ordinary OpenClaw workflows.
+- Do not keep retrying large private audio files without user approval.
 
 ## Telegram Setup And Pairing
 

@@ -63,6 +63,7 @@ Windows
 - 在 watchdog 内用本地 HTTP 仪表盘端口检查 gateway 健康，不在 systemd timer 环境里调用 `openclaw gateway probe`，避免 CLI 环境差异造成误判。
 - 为 gateway 启动加入宽限期：OpenClaw 启动、补装 bundled runtime dependencies、启动 channels/sidecars 时，watchdog 不应因为 HTTP 探测暂时失败而重启 gateway。
 - 安装本机只读 OpenClaw Monitor 面板，用 Windows 原生小程序显示 gateway、Telegram、后台任务、TaskFlow、Token/上下文流向、本地记录成本、最近会话和日志提醒，并支持系统托盘常驻。
+- 增加豆包/火山录音文件识别的本地工具层：通用 API key 可以用于文本模型，但音频识别还需要开通 `volc.bigasr.auc_turbo` 资源，并通过单独 ASR 脚本处理本地音频。
 - 在接入 Telegram 之前，先选择模型并验证 OpenClaw 本地可以正常回复。
 - 管理安装过程中弹出的终端窗口：需要用户操作的窗口保留，不需要的窗口及时关闭。
 - 安全配置 Telegram bot token，避免用户把 token 粘贴到聊天里。
@@ -88,6 +89,10 @@ Windows
             |-- Install-Autostart.ps1
             |-- Uninstall-Autostart.ps1
             |-- OpenClawMonitor.ico
+            `-- README.md
+        `-- openclaw-doubao-asr/
+            |-- openclaw-doubao-asr
+            |-- Install-DoubaoAsrTool.ps1
             `-- README.md
 ```
 
@@ -124,6 +129,37 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-OpenClawMonito
 ```
 
 安装脚本会把源码复制到 `%LOCALAPPDATA%\OpenClawMonitor`，在本机编译 `OpenClawMonitor.exe`，创建 Startup-folder 自启动快捷方式，并启动面板。仓库不提交编译出来的 `.exe`。
+
+## 豆包 / 火山录音文件识别
+
+仓库也附带一个很小的 WSL 工具：
+
+```text
+openclaw-telegram-wsl-setup/tools/openclaw-doubao-asr/
+```
+
+它解决的是“本地音频转文字”这一层，不是把豆包聊天模型伪装成原生音频理解模型。当前结论是：
+
+- 豆包文本模型可以做转写后的风格分析、taxonomy 复核、字幕/转写语气归纳。
+- Ark 聊天接口不能直接替代 Gemini 做原生音频理解。
+- 录音文件识别需要火山 ASR 资源，默认资源 ID 是 `volc.bigasr.auc_turbo`。
+- 脚本只读取本机 `~/.openclaw/secrets/volcengine.env` 里的 key，不把 key 放进仓库。
+- 真正执行转写时会把音频文件上传到火山引擎；在处理私人音频前必须得到用户明确同意。
+
+安装命令：
+
+```powershell
+cd .\openclaw-telegram-wsl-setup\tools\openclaw-doubao-asr
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-DoubaoAsrTool.ps1
+```
+
+安装后可以先做本地自检，不上传音频：
+
+```bash
+openclaw-doubao-asr --self-check
+```
+
+如果自检显示 key 存在、资源 ID 是 `volc.bigasr.auc_turbo`，但转写仍失败，优先去火山控制台确认“大模型录音文件识别”资源是否开通、项目是否有权限、套餐或额度是否可用。
 
 ## 本地安装到 Codex
 

@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+openclaw-doubao-asr - transcribe a local audio file with Volcengine/Doubao ASR.
+
+Usage:
+  openclaw-doubao-asr --self-check
+  openclaw-doubao-asr /path/to/audio.wav [--output result.json]
+  openclaw-doubao-asr --text-only /path/to/audio.mp3
+
+Environment:
+  VOLCENGINE_ASR_API_KEY      optional; falls back to VOLCANO_ENGINE_API_KEY, VOLCENGINE_API_KEY, DOUBAO_ASR_API_KEY
+  VOLCENGINE_ASR_RESOURCE_ID  default: volc.bigasr.auc_turbo
+  VOLCENGINE_ASR_ENDPOINT     default: https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash
+  VOLCENGINE_ASR_MODEL_NAME   default: bigmodel
+  VOLCENGINE_ASR_UID          default: local-openclaw
+  VOLCENGINE_ENV_FILE         default: ~/.openclaw/secrets/volcengine.env
+
+Notes:
+  This uploads the selected audio file to Volcengine. Do not run it on private
+  audio unless the user has explicitly approved that transfer.
+EOF
+}
+
+output_path=""
+text_only=0
+self_check=0
+audio_path=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --self-check)
+      self_check=1
+      shift
+      ;;
+    --output|-o)
+      [[ $# -ge 2 ]] || { echo "Missing value for --output" >&2; exit 2; }
+      output_path="$2"
+      shift 2
+      ;;
+    --text-only)
+      text_only=1
+      shift
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [[ -z "$audio_path" ]]; then
+        audio_path="$1"
+      else
+        echo "Unexpected extra argument: $1" >&2
+        exit 2
+      fi
+      shift
+      ;;
+  esac
+done
+
+env_file="${VOLCENGINE_ENV_FILE:-$HOME/.openclaw/secrets/volcengine.env}"
+if [[ -r "$env_file" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+
+api_key="${VOLCENGINE_ASR_API_KEY:-${VOLCANO_ENGINE_API_KEY:-${VOLCENGINE_API_KEY:-${DOUBAO_ASR_API_KEY:-}}}}"
+resource_id="${VOLCENGINE_ASR_RESOURCE_ID:-volc.bigasr.auc_turbo}"
+endpoint="${VOLCENGINE_ASR_ENDPOINT:-https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash}"
+model_name="${VOLCENGINE_ASR_MODEL_NAME:-bigmodel}"
+uid="${VOLCENGINE_ASR_UID:-local-openclaw}"
+
+if [[ "$self_check" -eq 1 ]]; then
+  if [[ -z "$api_key" ]]; then
+    echo "asr_key=missing"
+    exit 1
+  fi
+  echo "asr_key=present"
+  echo "resource_id=$resource_id"
+  echo "endpoint=$endpoint"
+  echo "model_name=$model_name"
+  echo "env_file=$env_file"
+  exit 0
+fi
+
+if [[ -z "$audio_path" ]]; then
+  usage >&2
+  exit 2
+fi
+
+if [[ -z "$api_key" ]]; then
+  echo "Missing Volcengine API key. Set VOLCENGINE_ASR_API_KEY or save ~/.openclaw/secrets/volcengine.env." >&2
+  exit 1
+fi
+
+if [[ ! -f "$audio_path" ]]; then
+  echo "Audio file not found: $audio_path" >&2
+  exit 1
+fi
+
+size_bytes="$(wc -c < "$audio_path" | tr -d ' ')"
+max_bytes=$((100 * 1024 * 1024))
+if [[ "$size_bytes" -gt "$max_bytes" ]]; then
+  echo "Audio file is larger than 100MB. Use the standard recording API or cut it into smaller files." >&2
+  exit 1
+fi
+
+python3 - "$audio_path" "$output_path" "$text_only" <<'PY'
+import base64
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+import uuid
+
+audio_path, output_path, text_only = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+api_key = os.environ.get("VOLCENGINE_ASR_API_KEY") or os.environ.get("VOLCANO_ENGINE_API_KEY") or os.environ.get("VOLCENGINE_API_KEY") or os.environ.get("DOUBAO_ASR_API_KEY")
+endpoint = os.environ.get("VOLCENGINE_ASR_ENDPOINT", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash")
+resource_id = os.environ.get("VOLCENGINE_ASR_RESOURCE_ID", "volc.bigasr.auc_turbo")
+model_name = os.environ.get("VOLCENGINE_ASR_MODEL_NAME", "bigmodel")
+uid = os.environ.get("VOLCENGINE_ASR_UID", "local-openclaw")
+
+with open(audio_path, "rb") as f:
+    audio_data = base64.b64encode(f.read()).decode("utf-8")
+
+payload = {
+    "user": {"uid": uid},
+    "audio": {"data": audio_data},
+    "request": {"model_name": model_name},
+}
+
+headers = {
+    "Content-Type": "application/json",
+    "X-Api-Key": api_key,
+    "X-Api-Resource-Id": resource_id,
+    "X-Api-Request-Id": str(uuid.uuid4()),
+    "X-Api-Sequence": "-1",
+}
+
+request = urllib.request.Request(
+    endpoint,
+    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+    headers=headers,
+    method="POST",
+)
+
+try:
+    with urllib.request.urlopen(request, timeout=180) as response:
+        body = response.read()
+        status_code = response.headers.get("X-Api-Status-Code", "")
+        status_message = response.headers.get("X-Api-Message", "")
+        logid = response.headers.get("X-Tt-Logid", "")
+except urllib.error.HTTPError as e:
+    body = e.read().decode("utf-8", errors="replace")
+    print(json.dumps({
+        "ok": False,
+        "http_status": e.code,
+        "message": e.reason,
+        "body": body[:2000],
+    }, ensure_ascii=False, indent=2), file=sys.stderr)
+    sys.exit(1)
+
+try:
+    data = json.loads(body.decode("utf-8"))
+except Exception:
+    data = {"raw": body.decode("utf-8", errors="replace")}
+
+result = {
+    "ok": status_code == "20000000",
+    "status_code": status_code,
+    "status_message": status_message,
+    "logid": logid,
+    "response": data,
+}
+
+if output_path:
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+if text_only:
+    print(data.get("result", {}).get("text", ""))
+else:
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+if status_code != "20000000":
+    sys.exit(1)
+PY
