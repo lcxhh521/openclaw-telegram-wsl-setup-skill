@@ -67,7 +67,7 @@ namespace OpenClawLocalMonitor
 
             var title = new Label
             {
-                Text = "你想怎么处理监控面板？",
+                Text = "关闭监控面板？",
                 Left = 22,
                 Top = 18,
                 Width = 360,
@@ -76,7 +76,7 @@ namespace OpenClawLocalMonitor
             };
             var body = new Label
             {
-                Text = "最小化按钮会保留在任务栏。点击右上角 X 时，你可以选择让它继续在托盘后台运行，或彻底关闭程序。",
+                Text = "可以让它留在系统托盘继续监控，也可以直接退出。",
                 Left = 22,
                 Top = 52,
                 Width = 370,
@@ -84,7 +84,7 @@ namespace OpenClawLocalMonitor
             };
             remember = new CheckBox
             {
-                Text = "以后都按这个选择处理",
+                Text = "记住我的选择",
                 Left = 22,
                 Top = 106,
                 Width = 220,
