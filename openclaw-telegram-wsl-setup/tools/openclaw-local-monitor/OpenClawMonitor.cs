@@ -81,7 +81,6 @@ namespace OpenClawLocalMonitor
         const string OpenClawCommand = "openclaw";
         readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 100 };
         readonly Timer timer = new Timer();
-        readonly ToolTip toolTip = new ToolTip { AutoPopDelay = 12000, InitialDelay = 250, ReshowDelay = 100, ShowAlways = true };
         readonly object costLock = new object();
         CostSummary cachedCost = new CostSummary();
         bool refreshing;
@@ -100,6 +99,7 @@ namespace OpenClawLocalMonitor
         Card tokenOutput;
         Card tokenCache;
         Card tokenCost;
+        RoundedPanel costHintPopup;
         Label heroTitle;
         Label heroDetail;
         Label legendLine;
@@ -854,22 +854,56 @@ namespace OpenClawLocalMonitor
         void AddCostHint()
         {
             const string text = "这是 OpenClaw 根据本地 usage.cost 记录汇总的估算成本，不等同于服务商最终账单。实际扣费以 OpenAI / Gemini / DeepSeek 等后台账单为准。";
-            var info = new Label
+            var info = new InfoBadge
             {
-                Text = "ⓘ",
-                Location = new Point(84, 11),
-                Size = new Size(18, 18),
-                ForeColor = Color.FromArgb(100, 116, 139),
-                Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold),
-                BackColor = Color.Transparent,
-                Cursor = Cursors.Help,
-                TextAlign = ContentAlignment.MiddleCenter
+                Location = new Point(86, 12),
+                Size = new Size(15, 15),
+                Cursor = Cursors.Help
             };
             tokenCost.Panel.Controls.Add(info);
             info.BringToFront();
-            toolTip.SetToolTip(info, text);
-            toolTip.SetToolTip(tokenCost.Panel, text);
-            toolTip.SetToolTip(tokenCost.Value, text);
+
+            costHintPopup = new RoundedPanel
+            {
+                Location = new Point(tokenCost.Panel.Left, tokenCost.Panel.Bottom + 8),
+                Size = new Size(530, 56),
+                BackColor = Color.FromArgb(248, 250, 252),
+                BorderColor = Color.FromArgb(203, 213, 225),
+                Radius = 12,
+                Visible = false
+            };
+            var hintText = new Label
+            {
+                Text = text,
+                Location = new Point(14, 9),
+                Size = new Size(502, 38),
+                AutoEllipsis = false,
+                ForeColor = Color.FromArgb(51, 65, 85),
+                Font = new Font("Microsoft YaHei UI", 9f),
+                BackColor = Color.Transparent
+            };
+            costHintPopup.Controls.Add(hintText);
+            Controls.Add(costHintPopup);
+
+            EventHandler show = (s, e) =>
+            {
+                costHintPopup.Visible = true;
+                costHintPopup.BringToFront();
+            };
+            EventHandler hide = (s, e) => BeginInvoke(new Action(() =>
+            {
+                var p = PointToClient(Cursor.Position);
+                if (!tokenCost.Panel.Bounds.Contains(p) && !costHintPopup.Bounds.Contains(p))
+                    costHintPopup.Visible = false;
+            }));
+            tokenCost.Panel.MouseEnter += show;
+            tokenCost.Value.MouseEnter += show;
+            info.MouseEnter += show;
+            costHintPopup.MouseEnter += show;
+            tokenCost.Panel.MouseLeave += hide;
+            tokenCost.Value.MouseLeave += hide;
+            info.MouseLeave += hide;
+            costHintPopup.MouseLeave += hide;
         }
 
         void SetCard(Card card, string state)
@@ -1020,6 +1054,31 @@ namespace OpenClawLocalMonitor
             };
             Panel.Controls.Add(titleLabel);
             Panel.Controls.Add(Value);
+        }
+    }
+
+    sealed class InfoBadge : Control
+    {
+        public InfoBadge()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+            BackColor = Color.Transparent;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var rect = new Rectangle(1, 1, Width - 3, Height - 3);
+            using (var fill = new SolidBrush(Color.FromArgb(239, 246, 255)))
+            using (var border = new Pen(Color.FromArgb(96, 165, 250)))
+            using (var text = new SolidBrush(Color.FromArgb(37, 99, 235)))
+            using (var font = new Font("Segoe UI", 7.5f, FontStyle.Bold))
+            using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            {
+                e.Graphics.FillEllipse(fill, rect);
+                e.Graphics.DrawEllipse(border, rect);
+                e.Graphics.DrawString("i", font, text, rect, format);
+            }
         }
     }
 
