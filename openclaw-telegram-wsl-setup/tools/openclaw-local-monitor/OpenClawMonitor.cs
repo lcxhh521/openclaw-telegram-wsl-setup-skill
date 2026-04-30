@@ -81,6 +81,7 @@ namespace OpenClawLocalMonitor
         const string OpenClawCommand = "openclaw";
         readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 100 };
         readonly Timer timer = new Timer();
+        readonly ToolTip toolTip = new ToolTip { AutoPopDelay = 12000, InitialDelay = 250, ReshowDelay = 100, ShowAlways = true };
         readonly object costLock = new object();
         CostSummary cachedCost = new CostSummary();
         bool refreshing;
@@ -238,6 +239,7 @@ namespace OpenClawLocalMonitor
             tokenCache = new Card("缓存读取", 496, 376, 142, 84);
             tokenCost = new Card("已记录成本", 652, 376, 128, 84);
             Controls.AddRange(new Control[] { tokenTotal.Panel, tokenInput.Panel, tokenOutput.Panel, tokenCache.Panel, tokenCost.Panel });
+            AddCostHint();
             tokenList = MakeList(796, 376, 386, 84);
             Controls.Add(tokenList);
 
@@ -847,6 +849,27 @@ namespace OpenClawLocalMonitor
             if (key.Contains("gateway")) return "网关";
             if (key.Contains("telegram")) return "Telegram";
             return key;
+        }
+
+        void AddCostHint()
+        {
+            const string text = "这是 OpenClaw 根据本地 usage.cost 记录汇总的估算成本，不等同于服务商最终账单。实际扣费以 OpenAI / Gemini / DeepSeek 等后台账单为准。";
+            var info = new Label
+            {
+                Text = "ⓘ",
+                Location = new Point(84, 11),
+                Size = new Size(18, 18),
+                ForeColor = Color.FromArgb(100, 116, 139),
+                Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold),
+                BackColor = Color.Transparent,
+                Cursor = Cursors.Help,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+            tokenCost.Panel.Controls.Add(info);
+            info.BringToFront();
+            toolTip.SetToolTip(info, text);
+            toolTip.SetToolTip(tokenCost.Panel, text);
+            toolTip.SetToolTip(tokenCost.Value, text);
         }
 
         void SetCard(Card card, string state)
