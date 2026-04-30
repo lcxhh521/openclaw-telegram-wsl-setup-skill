@@ -62,7 +62,7 @@ Windows
 - 为 network recovery watchdog 加防抖和冷却：单次网络探测失败或单次 gateway 探测失败只记录，不立刻重启，避免 watchdog 自己制造回复延迟。
 - 在 watchdog 内用本地 HTTP 仪表盘端口检查 gateway 健康，不在 systemd timer 环境里调用 `openclaw gateway probe`，避免 CLI 环境差异造成误判。
 - 为 gateway 启动加入宽限期：OpenClaw 启动、补装 bundled runtime dependencies、启动 channels/sidecars 时，watchdog 不应因为 HTTP 探测暂时失败而重启 gateway。
-- 安装本机只读 OpenClaw Monitor 面板，用 Windows 原生小程序显示 gateway、Telegram、后台任务、TaskFlow、Token/上下文流向、最近会话和日志提醒，并支持系统托盘常驻。
+- 安装本机只读 OpenClaw Monitor 面板，用 Windows 原生小程序显示 gateway、Telegram、后台任务、TaskFlow、Token/上下文流向、本地记录成本、最近会话和日志提醒，并支持系统托盘常驻。
 - 在接入 Telegram 之前，先选择模型并验证 OpenClaw 本地可以正常回复。
 - 管理安装过程中弹出的终端窗口：需要用户操作的窗口保留，不需要的窗口及时关闭。
 - 安全配置 Telegram bot token，避免用户把 token 粘贴到聊天里。
@@ -112,6 +112,7 @@ openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/
 - gateway 和 Telegram 是否可用。
 - 后台是否存在 `queued/running` task 或活跃 TaskFlow。
 - Token / 上下文使用快照，以及主会话、Telegram、子任务的流向。
+- 从本地 session 日志里的 `usage.cost` 汇总已记录成本，并按模型列出成本和 token 去向；这不是服务商账单替代品。
 - 最近会话和 Telegram/error 日志提醒。
 - 系统托盘常驻，最小化或关闭窗口时隐藏到托盘。
 

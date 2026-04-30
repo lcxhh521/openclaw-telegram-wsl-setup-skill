@@ -52,6 +52,8 @@ namespace OpenClawLocalMonitor
         public long TokenOutput;
         public long TokenCacheRead;
         public string TokenContext = "-";
+        public string CostText = "-";
+        public string CostState = "warn";
         public long LastSessionAgeMs = -1;
         public string LastSessionSource = "-";
         public string LastSessionModel = "-";
@@ -64,12 +66,23 @@ namespace OpenClawLocalMonitor
         public readonly List<string> TokenFlows = new List<string>();
     }
 
+    sealed class CostSummary
+    {
+        public DateTime UpdatedAt = DateTime.MinValue;
+        public bool Available;
+        public double TotalCost;
+        public string Error = "";
+        public readonly List<string> Lines = new List<string>();
+    }
+
     sealed class MonitorForm : Form
     {
         const string WslDistro = "Ubuntu";
         const string OpenClawCommand = "openclaw";
         readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 100 };
         readonly Timer timer = new Timer();
+        readonly object costLock = new object();
+        CostSummary cachedCost = new CostSummary();
         bool refreshing;
 
         Label updated;
@@ -85,6 +98,7 @@ namespace OpenClawLocalMonitor
         Card tokenInput;
         Card tokenOutput;
         Card tokenCache;
+        Card tokenCost;
         Label heroTitle;
         Label heroDetail;
         Label legendLine;
@@ -179,7 +193,7 @@ namespace OpenClawLocalMonitor
         void BuildUi()
         {
             Controls.Add(MakeLabel("OpenClaw 监控面板", 28, 20, 360, 34, 20f, Color.FromArgb(15, 23, 42), true));
-            Controls.Add(MakeLabel("本机只读状态中心：运行、Telegram、任务、Token 流向", 30, 56, 720, 24, 9f, Color.FromArgb(100, 116, 139), false));
+            Controls.Add(MakeLabel("本机只读状态中心：运行、Telegram、任务、Token 和成本流向", 30, 56, 720, 24, 9f, Color.FromArgb(100, 116, 139), false));
 
             updated = MakeLabel("等待首次刷新...", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
             Controls.Add(updated);
@@ -218,11 +232,12 @@ namespace OpenClawLocalMonitor
             Controls.AddRange(new Control[] { overall.Panel, gateway.Panel, telegram.Panel, tasks.Panel, audit.Panel, session.Panel });
 
             Controls.Add(MakeLabel("Token / 成本流向", 28, 344, 260, 24, 12f, Color.FromArgb(15, 23, 42), true));
-            tokenTotal = new Card("上下文占用", 28, 376, 176, 84);
-            tokenInput = new Card("输入 Token", 220, 376, 176, 84);
-            tokenOutput = new Card("输出 Token", 412, 376, 176, 84);
-            tokenCache = new Card("缓存读取", 604, 376, 176, 84);
-            Controls.AddRange(new Control[] { tokenTotal.Panel, tokenInput.Panel, tokenOutput.Panel, tokenCache.Panel });
+            tokenTotal = new Card("上下文占用", 28, 376, 142, 84);
+            tokenInput = new Card("输入 Token", 184, 376, 142, 84);
+            tokenOutput = new Card("输出 Token", 340, 376, 142, 84);
+            tokenCache = new Card("缓存读取", 496, 376, 142, 84);
+            tokenCost = new Card("已记录成本", 652, 376, 128, 84);
+            Controls.AddRange(new Control[] { tokenTotal.Panel, tokenInput.Panel, tokenOutput.Panel, tokenCache.Panel, tokenCost.Panel });
             tokenList = MakeList(796, 376, 386, 84);
             Controls.Add(tokenList);
 
@@ -347,6 +362,7 @@ namespace OpenClawLocalMonitor
                 FillFromProbe(snapshot, probe.Item2);
             }
             FillTokenUsage(snapshot, status.Item2);
+            FillCostUsage(snapshot);
             FillTasks(snapshot, taskData.Item2);
             FillFlows(snapshot, flowData);
             FillAudit(snapshot, auditData.Item2);
@@ -503,6 +519,80 @@ namespace OpenClawLocalMonitor
 
             if (s.TokenFlows.Count == 0)
                 s.TokenFlows.Add("暂时没有可用的 Token 会话快照。");
+        }
+
+        void FillCostUsage(Snapshot s)
+        {
+            var summary = GetCostSummary();
+            if (summary.Available)
+            {
+                s.CostText = FormatUsd(summary.TotalCost);
+                s.CostState = summary.TotalCost > 0 ? "work" : "good";
+                foreach (var line in summary.Lines.Take(6))
+                    s.TokenFlows.Add(line);
+            }
+            else
+            {
+                s.CostText = "未记录";
+                s.CostState = "warn";
+                s.TokenFlows.Add(string.IsNullOrWhiteSpace(summary.Error)
+                    ? "成本 · 本地 session 日志里暂时没有 usage.cost；API-key 模型更容易留下成本记录。"
+                    : "成本 · 读取失败：" + Trim(summary.Error, 100));
+            }
+        }
+
+        CostSummary GetCostSummary()
+        {
+            lock (costLock)
+            {
+                if (cachedCost.Available && (DateTime.Now - cachedCost.UpdatedAt).TotalSeconds < 60)
+                    return cachedCost;
+            }
+
+            var fresh = ReadCostSummary();
+            lock (costLock)
+            {
+                cachedCost = fresh;
+                return cachedCost;
+            }
+        }
+
+        CostSummary ReadCostSummary()
+        {
+            var summary = new CostSummary { UpdatedAt = DateTime.Now };
+            try
+            {
+                var script =
+                    "const fs=require('fs');const path=require('path');const root=(process.env.HOME||'')+'/.openclaw/agents/main/sessions';const out={available:false,totalCost:0,buckets:[],error:''};try{if(!fs.existsSync(root)){out.error='找不到 session 目录';}else{const map={};const seen=new Set();const add=(o,u,base)=>{const c=u&&u.cost;const value=Number(c&&c.total||0);if(!(value>0))return;const provider=String(o.provider||base.provider||'-');const model=String(o.model||base.model||'-');const dedupe=String(o.responseId||o.id||'')||[o.timestamp,o.ts,provider,model,value,u.input,u.output,u.cacheRead,u.cacheWrite].join('|');if(seen.has(dedupe))return;seen.add(dedupe);const key=provider+'/'+model;const b=map[key]||(map[key]={key,cost:0,input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,replies:0});b.cost+=value;b.input+=Number(u.input||0);b.output+=Number(u.output||0);b.cacheRead+=Number(u.cacheRead||0);b.cacheWrite+=Number(u.cacheWrite||0);b.totalTokens+=Number(u.totalTokens||0);b.replies+=1;};const visit=(o,base)=>{if(!o||typeof o!=='object')return;if(o.usage&&o.usage.cost)add(o,o.usage,base);if(Array.isArray(o)){for(const v of o)visit(v,base);return;}for(const k of Object.keys(o)){if(k==='config'||k==='redacted')continue;visit(o[k],base);}};const files=fs.readdirSync(root).filter(f=>f.endsWith('.jsonl')).map(f=>({f,p:path.join(root,f),m:fs.statSync(path.join(root,f)).mtimeMs})).sort((a,b)=>b.m-a.m).slice(0,220);for(const file of files){const text=fs.readFileSync(file.p,'utf8');for(const line of text.split(/\\r?\\n/)){if(!line||line.indexOf('usage')<0||line.indexOf('cost')<0)continue;let row;try{row=JSON.parse(line);}catch{continue;}visit(row,{provider:row.provider,model:row.model});}}out.buckets=Object.values(map).sort((a,b)=>b.cost-a.cost);out.totalCost=out.buckets.reduce((n,b)=>n+b.cost,0);out.available=out.buckets.length>0;}}catch(e){out.error=e&&e.message?e.message:String(e);}console.log(JSON.stringify(out));";
+                var result = RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "node", "-e", script }, 60000);
+                if (!result.Ok)
+                {
+                    summary.Error = Trim(result.Stderr + result.Error, 160);
+                    return summary;
+                }
+
+                var payload = AsDict(json.DeserializeObject(result.Stdout));
+                summary.TotalCost = ToDouble(Get(payload, "totalCost"));
+                summary.Available = ToBool(Get(payload, "available"));
+                summary.Error = Convert.ToString(Get(payload, "error") ?? "");
+                foreach (var item in AsList(Get(payload, "buckets")).Cast<object>().Take(8))
+                {
+                    var b = AsDict(item);
+                    summary.Lines.Add(
+                        "成本 · " + Convert.ToString(Get(b, "key") ?? "-") +
+                        " · " + FormatUsd(ToDouble(Get(b, "cost"))) +
+                        " · " + Math.Max(0, ToLong(Get(b, "replies"))) + " 次回复" +
+                        " · 入 " + FormatTokens(Math.Max(0, ToLong(Get(b, "input")))) +
+                        "｜出 " + FormatTokens(Math.Max(0, ToLong(Get(b, "output")))) +
+                        "｜缓存 " + FormatTokens(Math.Max(0, ToLong(Get(b, "cacheRead"))) + Math.Max(0, ToLong(Get(b, "cacheWrite")))));
+                }
+                return summary;
+            }
+            catch (Exception ex)
+            {
+                summary.Error = ex.Message;
+                return summary;
+            }
         }
 
         string TokenSource(string key)
@@ -669,6 +759,8 @@ namespace OpenClawLocalMonitor
             SetCard(tokenOutput, s.TokenOutput > 0 ? "good" : "warn");
             tokenCache.Value.Text = FormatTokens(s.TokenCacheRead);
             SetCard(tokenCache, s.TokenCacheRead > 0 ? "good" : "warn");
+            tokenCost.Value.Text = s.CostText;
+            SetCard(tokenCost, s.CostState);
 
             tokenList.Items.Clear();
             foreach (var row in s.TokenFlows) tokenList.Items.Add(row);
@@ -816,6 +908,12 @@ namespace OpenClawLocalMonitor
             try { return Convert.ToInt64(value); } catch { return -1; }
         }
 
+        static double ToDouble(object value)
+        {
+            if (value == null) return 0;
+            try { return Convert.ToDouble(value); } catch { return 0; }
+        }
+
         static string AgeSince(long epochMs)
         {
             if (epochMs <= 0) return "-";
@@ -842,6 +940,13 @@ namespace OpenClawLocalMonitor
             if (value >= 1000000) return (value / 1000000d).ToString("0.#") + "M";
             if (value >= 1000) return (value / 1000d).ToString("0.#") + "K";
             return value.ToString();
+        }
+
+        static string FormatUsd(double value)
+        {
+            if (value <= 0) return "$0.00";
+            if (value < 0.01) return "$" + value.ToString("0.0000");
+            return "$" + value.ToString("0.00");
         }
 
         static string Trim(string text, int max)

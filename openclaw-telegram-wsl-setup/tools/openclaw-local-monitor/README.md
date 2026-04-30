@@ -7,6 +7,7 @@ It is intentionally read-only. It shows:
 - gateway and Telegram readiness
 - strict background task state from `openclaw tasks list` and TaskFlow pressure
 - token/context snapshots from `openclaw status --json`
+- local recorded cost from session `usage.cost`, grouped by model
 - recent sessions and Telegram/error notices
 - system tray behavior so the panel can stay in the background
 
@@ -52,4 +53,5 @@ This removes only the Startup shortcut. It does not delete the monitor folder.
 
 - Do not commit the compiled `OpenClawMonitor.exe`.
 - Do not store OpenClaw tokens, API keys, auth profiles, or logs in this folder.
+- Cost shown by the panel comes from local OpenClaw session usage records. Treat it as OpenClaw's recorded/estimated model cost, not as a replacement for provider billing pages.
 - The panel assumes the WSL distro is named `Ubuntu` and that `openclaw` is available on the WSL user's login-shell `PATH`; adjust `OpenClawMonitor.cs` before building if the target machine differs.
