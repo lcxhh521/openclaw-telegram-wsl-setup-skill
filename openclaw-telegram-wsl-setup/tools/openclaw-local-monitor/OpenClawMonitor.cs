@@ -1051,23 +1051,18 @@ namespace OpenClawLocalMonitor
                     if (double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out seconds))
                         latestArtifactMs = Math.Max(latestArtifactMs, (long)(seconds * 1000));
 
-                    if (artifactRows < 6)
-                    {
-                        var name = Path.GetFileName(parts[2]);
-                        s.Tasks.Add(new[] { Trim(name, 42), "本地产物", "刚产出", AgeSince((long)(seconds * 1000)), "工作区产物心跳" });
-                        artifactRows++;
-                    }
+                    artifactRows++;
                 }
             }
 
             if (artifactRows > 0)
             {
-                s.LocalWorkItems = Math.Max(s.LocalWorkItems, 1);
                 s.LocalWorkAge = AgeSince(latestArtifactMs);
-                var label = s.LocalDaemonActive ? "本地 daemon + 产物心跳" : "本地产物心跳";
+                var label = s.LocalDaemonActive ? "本地 daemon + 最近产物" : "最近产物";
+                var suffix = s.LocalDaemonActive ? "" : "（不计为正在运行任务）";
                 s.StatusLine = string.IsNullOrWhiteSpace(s.StatusLine)
-                    ? label + " " + s.LocalWorkAge
-                    : s.StatusLine + " | " + label + " " + s.LocalWorkAge;
+                    ? label + " " + s.LocalWorkAge + suffix
+                    : s.StatusLine + " | " + label + " " + s.LocalWorkAge + suffix;
             }
             else if (s.LocalDaemonActive)
             {
@@ -1194,9 +1189,9 @@ namespace OpenClawLocalMonitor
                 return "有项目需要处理。";
             }
             if (s.State == "Degraded") return "OpenClaw 服务仍有响应，但本轮 gateway 探针超时。面板会自动重试，连续失败才标红。";
-            if (s.State == "Working") return "检测到 OpenClaw 注册任务、TaskFlow 或本地产物心跳。可以在下方表格看进展。";
-            if (s.State == "Ready") return "网关和 Telegram 已连接；后台没有 queued/running 任务、活跃 TaskFlow 或本地产物心跳。";
-            return "后台没有 queued/running 任务、活跃 TaskFlow 或本地产物心跳。";
+            if (s.State == "Working") return "检测到 OpenClaw 注册任务、活跃 TaskFlow 或仍在运行的本地 daemon。可以在下方表格看进展。";
+            if (s.State == "Ready") return "网关和 Telegram 已连接；后台没有 queued/running 任务、活跃 TaskFlow 或仍在运行的本地 daemon。";
+            return "后台没有 queued/running 任务、活跃 TaskFlow 或仍在运行的本地 daemon。";
         }
 
         Color HeroColor(Snapshot s)
