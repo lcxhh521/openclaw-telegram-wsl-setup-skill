@@ -117,7 +117,7 @@ openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/
 - gateway 和 Telegram 是否可用。
 - 后台是否存在 `queued/running` task、活跃 TaskFlow，或正在持续产出的本地 daemon/工作区产物心跳。
 - Token / 上下文使用快照，以及主会话、Telegram、子任务的流向。
-- 从本地 session 日志里的 `usage.cost` 汇总已记录成本，并按模型列出成本和 token 去向；这不是服务商账单替代品。
+- 从当月本地 session 日志里的 `usage.cost` 汇总已记录成本，并按模型列出成本和 token 去向；每个自然月刷新一次，这不是服务商账单替代品。
 - 最近会话和 Telegram/error 日志提醒。
 - 系统托盘常驻，最小化或关闭窗口时隐藏到托盘。
 

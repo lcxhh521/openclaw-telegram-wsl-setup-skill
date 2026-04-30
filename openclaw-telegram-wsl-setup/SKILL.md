@@ -834,14 +834,14 @@ The panel is a user-local, read-only Windows utility. It should help the user an
 - Is Telegram connected?
 - Are there real background tasks running?
 - Where are token/context snapshots flowing: main session, Telegram, or subtask?
-- What cost has OpenClaw recorded locally from `usage.cost`, grouped by model?
+- What cost has OpenClaw recorded locally from this calendar month's `usage.cost`, grouped by model?
 - Are there recent Telegram/error notices?
 
 Important semantics:
 
 - "后台任务" means real backend work: `openclaw tasks list --json` entries with `status=queued` or `status=running`, TaskFlow pressure from `openclaw tasks flow list` where active/blocked/cancel-requested is nonzero, plus clearly labeled local daemon/workspace artifact heartbeat when OpenClaw is producing local learning artifacts outside the task registry.
 - Recent Telegram messages, recently updated sessions, or token growth are not enough to say a background task is running. Show them only as context unless there is also a task, TaskFlow pressure, daemon, or artifact heartbeat.
-- Cost shown in the panel is OpenClaw's local recorded/estimated `usage.cost` from session logs. It helps explain model spend direction, but it is not a provider invoice and must not be described as guaranteed billing truth.
+- Cost shown in the panel is OpenClaw's local recorded/estimated `usage.cost` from this calendar month's session logs. It resets naturally at the start of each calendar month, helps explain model spend direction, but is not a provider invoice and must not be described as guaranteed billing truth.
 - The panel must stay read-only. It must not edit OpenClaw config, auth profiles, tokens, provider keys, channel settings, or gateway service files.
 - The panel must not print or store secrets.
 - The compiled `.exe` is a local build artifact. Do not commit it to the skill repo.
