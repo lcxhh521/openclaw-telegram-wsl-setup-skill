@@ -1,8 +1,18 @@
-# OpenClaw Telegram WSL Setup Skill
+# OpenClaw 养虾指南（WSL Toolkit）
 
-这是一个用于 **Windows + WSL2 + Ubuntu + OpenClaw + Telegram Bot** 安装与修复的 Codex skill。
+这是我整理给自己和其他 OpenClaw 用户的一套 Windows/WSL 使用笔记和 Codex skill。
 
-它不是一份简单的命令清单，而是一套给 AI agent 使用的安装/诊断流程。目标是让用户不用理解 WSL、gateway、systemd、Telegram bot token、keepalive、权限范围这些细节，也能在 agent 的引导下把 OpenClaw 的 Telegram 入口稳定跑起来。
+它主要解决一类很烦的问题：OpenClaw 本身能跑，但一接上 Telegram、长期挂后台、电脑重启、WSL 休眠、断网恢复、代理切换、模型认证之后，就开始变得不稳定。很多时候表面现象只是“机器人不回消息”，真正的问题却藏在 gateway、systemd、WSL、token、模型或网络恢复里面。
+
+所以这个项目不是一个万能安装器，也不是官方文档替代品。它更像一份“养虾指南”：把我认为比较稳的 Windows + WSL2 路线、常见故障判断顺序、后台常驻方案、断网恢复方案、本机监控面板，都放在一个地方。
+
+我希望它做到三件事：
+
+- 不把 token、API key、auth profile、日志这类东西塞进仓库或聊天记录。
+- 每一步尽量能检查、能解释，不靠“重启试试”碰运气。
+- 尽量少让用户手工重复配置。该常驻的常驻，该监控的监控，该写进 skill 的就写进 skill。
+
+项目最开始只是为了修 OpenClaw + Telegram + WSL2。后来补上了 keepalive、断网恢复、Token/后台任务监控和一个 Windows 本机小面板，所以现在名字也从单纯的 Telegram setup 扩成了 WSL toolkit。
 
 ## 这个项目解决什么问题
 
@@ -81,13 +91,13 @@ Windows
             `-- README.md
 ```
 
-真正的 skill 是：
+真正的 Codex skill 仍然是：
 
 ```text
 openclaw-telegram-wsl-setup/
 ```
 
-这个目录应保持干净，只包含 skill 本身需要的文件和可复用工具。不要把本机 OpenClaw 配置、Telegram token、日志、截图、编译产物或机器专属诊断文件放进去。
+这个目录名暂时保留是为了兼容已经安装的 Codex skill 和旧链接；公开项目名称以 **OpenClaw 养虾指南（WSL Toolkit）** 为准。这个目录应保持干净，只包含 skill 本身需要的文件和可复用工具。不要把本机 OpenClaw 配置、Telegram token、日志、截图、编译产物或机器专属诊断文件放进去。
 
 ## 本机 OpenClaw Monitor 面板
 
@@ -127,7 +137,7 @@ Copy-Item -Recurse -Force `
 然后开启新的 Codex 会话，使用：
 
 ```text
-Use $openclaw-telegram-wsl-setup to install OpenClaw Telegram on Windows with WSL2.
+Use $openclaw-telegram-wsl-setup to follow the OpenClaw 养虾指南 on Windows with WSL2.
 ```
 
 如果你已经在中文对话中调用它，skill 会继续使用中文；如果是新安装流程，它会先确认安装语言。

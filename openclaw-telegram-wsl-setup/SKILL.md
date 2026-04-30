@@ -1,11 +1,11 @@
 ---
 name: openclaw-telegram-wsl-setup
-description: "Set up and repair OpenClaw's Telegram channel on Windows through WSL2. Use when the user wants OpenClaw to reply through Telegram, asks how OpenClaw was installed or should be kept running in WSL, needs WSL/OpenClaw/gateway readiness checks, gateway keepalive/autostart repair, local OpenClaw Monitor panel installation, long-offline network recovery, stale socket or polling recovery after internet loss, safe Telegram bot token entry, proxy-aware Telegram connectivity, pairing approval, channel startup verification, or diagnosis of Telegram messages that are not received, not answered, answered only after a long delay, or only work while WSL is awake."
+description: "A safe, transparent, simple OpenClaw guide and WSL toolkit for Windows. Use when the user wants to install, run, repair, monitor, or understand OpenClaw on Windows through WSL2; needs gateway readiness checks, keepalive/autostart, local OpenClaw Monitor panel installation, long-offline network recovery, stale socket or polling recovery after internet loss, Telegram bot setup/repair, safe token entry, proxy-aware connectivity, pairing approval, channel startup verification, or diagnosis of messages that are not received, not answered, delayed, or only work while WSL is awake."
 ---
 
-# OpenClaw Telegram WSL Setup
+# OpenClaw 养虾指南（WSL Toolkit）
 
-Use this skill to make Telegram the working remote-control channel for OpenClaw on Windows via WSL2. The workflow is interactive: observe state automatically, ask the user only for UI-only actions or secrets, configure Telegram safely, wait for the channel to actually start, and verify that a Telegram message receives a reply.
+Use this skill as a safe, transparent, simple guide for running OpenClaw on Windows through WSL2. Telegram is one supported remote-control channel, but the broader goal is to keep OpenClaw understandable and observable: install it carefully, verify the gateway and model, preserve user-controlled permissions, keep it alive after Windows login, recover after long offline periods, and expose local monitoring without hiding secrets or state from the user.
 
 ## Opening
 
