@@ -7,27 +7,40 @@ openclaw-doubao-asr - transcribe a local audio file with Volcengine/Doubao ASR.
 
 Usage:
   openclaw-doubao-asr --self-check
-  openclaw-doubao-asr /path/to/audio.wav [--output result.json]
-  openclaw-doubao-asr --text-only /path/to/audio.mp3
+  openclaw-doubao-asr --mode flash /path/to/audio.wav [--output result.json]
+  openclaw-doubao-asr --mode flash --text-only /path/to/audio.mp3
+  openclaw-doubao-asr --mode standard --url "https://example.com/audio.wav" [--wait]
+  openclaw-doubao-asr --mode standard --query <request-id>
 
 Environment:
   VOLCENGINE_ASR_API_KEY      optional; falls back to VOLCANO_ENGINE_API_KEY, VOLCENGINE_API_KEY, DOUBAO_ASR_API_KEY
   VOLCENGINE_ASR_RESOURCE_ID  default: volc.bigasr.auc_turbo
   VOLCENGINE_ASR_ENDPOINT     default: https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash
   VOLCENGINE_ASR_MODEL_NAME   default: bigmodel
+  VOLCENGINE_STANDARD_RESOURCE_ID      default: volc.seedasr.auc
+  VOLCENGINE_STANDARD_SUBMIT_ENDPOINT  default: https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit
+  VOLCENGINE_STANDARD_QUERY_ENDPOINT   default: https://openspeech.bytedance.com/api/v3/auc/bigmodel/query
+  VOLCENGINE_STANDARD_MODEL_NAME       default: bigmodel
   VOLCENGINE_ASR_UID          default: local-openclaw
   VOLCENGINE_ENV_FILE         default: ~/.openclaw/secrets/volcengine.env
 
 Notes:
-  This uploads the selected audio file to Volcengine. Do not run it on private
-  audio unless the user has explicitly approved that transfer.
+  Flash mode uploads the selected local audio file to Volcengine.
+  Standard mode sends a public audio URL to Volcengine.
+  Do not run either mode on private audio unless the user has explicitly approved that transfer.
 EOF
 }
 
+mode="flash"
 output_path=""
 text_only=0
 self_check=0
 audio_path=""
+audio_url=""
+query_id=""
+wait_result=0
+poll_interval=5
+poll_timeout=300
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,6 +51,37 @@ while [[ $# -gt 0 ]]; do
     --self-check)
       self_check=1
       shift
+      ;;
+    --mode)
+      [[ $# -ge 2 ]] || { echo "Missing value for --mode" >&2; exit 2; }
+      mode="$2"
+      shift 2
+      ;;
+    --url)
+      [[ $# -ge 2 ]] || { echo "Missing value for --url" >&2; exit 2; }
+      audio_url="$2"
+      mode="standard"
+      shift 2
+      ;;
+    --query)
+      [[ $# -ge 2 ]] || { echo "Missing value for --query" >&2; exit 2; }
+      query_id="$2"
+      mode="standard"
+      shift 2
+      ;;
+    --wait)
+      wait_result=1
+      shift
+      ;;
+    --interval)
+      [[ $# -ge 2 ]] || { echo "Missing value for --interval" >&2; exit 2; }
+      poll_interval="$2"
+      shift 2
+      ;;
+    --timeout)
+      [[ $# -ge 2 ]] || { echo "Missing value for --timeout" >&2; exit 2; }
+      poll_timeout="$2"
+      shift 2
       ;;
     --output|-o)
       [[ $# -ge 2 ]] || { echo "Missing value for --output" >&2; exit 2; }
@@ -77,6 +121,10 @@ api_key="${VOLCENGINE_ASR_API_KEY:-${VOLCANO_ENGINE_API_KEY:-${VOLCENGINE_API_KE
 resource_id="${VOLCENGINE_ASR_RESOURCE_ID:-volc.bigasr.auc_turbo}"
 endpoint="${VOLCENGINE_ASR_ENDPOINT:-https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash}"
 model_name="${VOLCENGINE_ASR_MODEL_NAME:-bigmodel}"
+standard_resource_id="${VOLCENGINE_STANDARD_RESOURCE_ID:-volc.seedasr.auc}"
+standard_submit_endpoint="${VOLCENGINE_STANDARD_SUBMIT_ENDPOINT:-https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit}"
+standard_query_endpoint="${VOLCENGINE_STANDARD_QUERY_ENDPOINT:-https://openspeech.bytedance.com/api/v3/auc/bigmodel/query}"
+standard_model_name="${VOLCENGINE_STANDARD_MODEL_NAME:-bigmodel}"
 uid="${VOLCENGINE_ASR_UID:-local-openclaw}"
 
 if [[ "$self_check" -eq 1 ]]; then
@@ -88,11 +136,26 @@ if [[ "$self_check" -eq 1 ]]; then
   echo "resource_id=$resource_id"
   echo "endpoint=$endpoint"
   echo "model_name=$model_name"
+  echo "standard_resource_id=$standard_resource_id"
+  echo "standard_submit_endpoint=$standard_submit_endpoint"
+  echo "standard_query_endpoint=$standard_query_endpoint"
+  echo "standard_model_name=$standard_model_name"
   echo "env_file=$env_file"
   exit 0
 fi
 
-if [[ -z "$audio_path" ]]; then
+if [[ "$mode" != "flash" && "$mode" != "standard" ]]; then
+  echo "Unknown mode: $mode" >&2
+  exit 2
+fi
+
+if [[ "$mode" == "flash" && -z "$audio_path" ]]; then
+  usage >&2
+  exit 2
+fi
+
+if [[ "$mode" == "standard" && -z "$audio_url" && -z "$query_id" ]]; then
+  echo "Standard mode needs --url or --query." >&2
   usage >&2
   exit 2
 fi
@@ -100,6 +163,126 @@ fi
 if [[ -z "$api_key" ]]; then
   echo "Missing Volcengine API key. Set VOLCENGINE_ASR_API_KEY or save ~/.openclaw/secrets/volcengine.env." >&2
   exit 1
+fi
+
+if [[ "$mode" == "standard" ]]; then
+  python3 - "$audio_url" "$query_id" "$output_path" "$text_only" "$wait_result" "$poll_interval" "$poll_timeout" <<'PY'
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+audio_url, query_id, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
+text_only = sys.argv[4] == "1"
+wait_result = sys.argv[5] == "1"
+poll_interval = int(sys.argv[6])
+poll_timeout = int(sys.argv[7])
+
+api_key = os.environ.get("VOLCENGINE_ASR_API_KEY") or os.environ.get("VOLCANO_ENGINE_API_KEY") or os.environ.get("VOLCENGINE_API_KEY") or os.environ.get("DOUBAO_ASR_API_KEY")
+submit_endpoint = os.environ.get("VOLCENGINE_STANDARD_SUBMIT_ENDPOINT", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit")
+query_endpoint = os.environ.get("VOLCENGINE_STANDARD_QUERY_ENDPOINT", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query")
+resource_id = os.environ.get("VOLCENGINE_STANDARD_RESOURCE_ID", "volc.seedasr.auc")
+model_name = os.environ.get("VOLCENGINE_STANDARD_MODEL_NAME", "bigmodel")
+uid = os.environ.get("VOLCENGINE_ASR_UID", "local-openclaw")
+
+def call(endpoint, payload, request_id):
+    headers = {
+        "Content-Type": "application/json",
+        "X-Api-Key": api_key,
+        "X-Api-Resource-Id": resource_id,
+        "X-Api-Request-Id": request_id,
+        "X-Api-Sequence": "-1",
+    }
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as response:
+            body = response.read()
+            status_code = response.headers.get("X-Api-Status-Code", "")
+            status_message = response.headers.get("X-Api-Message", "")
+            logid = response.headers.get("X-Tt-Logid", "")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        return {
+            "ok": False,
+            "http_status": e.code,
+            "message": e.reason,
+            "body": body[:2000],
+            "request_id": request_id,
+        }
+
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except Exception:
+        data = {"raw": body.decode("utf-8", errors="replace")}
+
+    return {
+        "ok": status_code == "20000000",
+        "status_code": status_code,
+        "status_message": status_message,
+        "logid": logid,
+        "request_id": request_id,
+        "response": data,
+    }
+
+def query(request_id):
+    payload = {
+        "user": {"uid": uid},
+        "request": {"model_name": model_name},
+    }
+    return call(query_endpoint, payload, request_id)
+
+if query_id:
+    result = query(query_id)
+else:
+    query_id = str(uuid.uuid4())
+    payload = {
+        "user": {"uid": uid},
+        "audio": {"url": audio_url},
+        "request": {"model_name": model_name},
+    }
+    result = call(submit_endpoint, payload, query_id)
+
+    if wait_result and result.get("ok"):
+        deadline = time.time() + poll_timeout
+        last = result
+        while time.time() < deadline:
+            time.sleep(poll_interval)
+            last = query(query_id)
+            code = str(last.get("status_code", ""))
+            # 20000000 means the service accepted the query. Many deployments
+            # put the real result or processing state in the JSON body.
+            body_text = json.dumps(last.get("response", {}), ensure_ascii=False)
+            if any(k in body_text for k in ("utterances", "text", "result")) and "running" not in body_text.lower():
+                result = last
+                break
+            result = last
+
+if output_path:
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+if text_only:
+    response = result.get("response", {})
+    text = response.get("result", {}).get("text", "")
+    if not text:
+        utterances = response.get("result", {}).get("utterances", [])
+        text = "\n".join(u.get("text", "") for u in utterances if isinstance(u, dict))
+    print(text)
+else:
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+if not result.get("ok"):
+    sys.exit(1)
+PY
+  exit $?
 fi
 
 if [[ ! -f "$audio_path" ]]; then

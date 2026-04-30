@@ -37,6 +37,10 @@ upsert() {
 upsert VOLCENGINE_ASR_RESOURCE_ID volc.bigasr.auc_turbo
 upsert VOLCENGINE_ASR_ENDPOINT https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash
 upsert VOLCENGINE_ASR_MODEL_NAME bigmodel
+upsert VOLCENGINE_STANDARD_RESOURCE_ID volc.seedasr.auc
+upsert VOLCENGINE_STANDARD_SUBMIT_ENDPOINT https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit
+upsert VOLCENGINE_STANDARD_QUERY_ENDPOINT https://openspeech.bytedance.com/api/v3/auc/bigmodel/query
+upsert VOLCENGINE_STANDARD_MODEL_NAME bigmodel
 '@
 
 $configureTarget = Join-Path $targetDir "configure-openclaw-doubao-asr.tmp.sh"

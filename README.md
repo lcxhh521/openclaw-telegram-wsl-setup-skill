@@ -142,9 +142,10 @@ openclaw-telegram-wsl-setup/tools/openclaw-doubao-asr/
 
 - 豆包文本模型可以做转写后的风格分析、taxonomy 复核、字幕/转写语气归纳。
 - Ark 聊天接口不能直接替代 Gemini 做原生音频理解。
-- 录音文件识别需要火山 ASR 资源，默认资源 ID 是 `volc.bigasr.auc_turbo`。
+- 极速版录音文件识别默认资源 ID 是 `volc.bigasr.auc_turbo`，适合短音频、本地临时测试。
+- 标准版录音文件识别默认资源 ID 是 `volc.seedasr.auc`，适合长音频或已经有公网 URL 的批量任务。
 - 脚本只读取本机 `~/.openclaw/secrets/volcengine.env` 里的 key，不把 key 放进仓库。
-- 真正执行转写时会把音频文件上传到火山引擎；在处理私人音频前必须得到用户明确同意。
+- 极速版会把本地音频文件上传到火山引擎；标准版会把音频公网 URL 发给火山引擎。处理私人音频前必须得到用户明确同意。
 
 安装命令：
 
@@ -160,6 +161,16 @@ openclaw-doubao-asr --self-check
 ```
 
 如果自检显示 key 存在、资源 ID 是 `volc.bigasr.auc_turbo`，但转写仍失败，优先去火山控制台确认“大模型录音文件识别”资源是否开通、项目是否有权限、套餐或额度是否可用。
+
+实际使用时：
+
+```bash
+# 极速版：直接处理本地短音频
+openclaw-doubao-asr --mode flash --text-only /path/to/audio.wav
+
+# 标准版：提交火山服务器可访问的音频 URL
+openclaw-doubao-asr --mode standard --url "https://example.com/audio.wav" --wait
+```
 
 ## 本地安装到 Codex
 

@@ -228,7 +228,7 @@ Codex may be able to infer and run the right install commands from the current e
 12. If the user wants local audio recognition through Doubao/Volcengine, install or verify the helper in `tools/openclaw-doubao-asr`.
    - Treat this as a separate ASR adapter, not as model routing.
    - Doubao text models can analyze transcripts; Ark chat models should not be described as native local-audio listeners unless the current provider docs prove that exact audio path works.
-   - The Volcengine recording-file ASR path needs a speech resource, usually `volc.bigasr.auc_turbo`, in addition to the general API key.
+   - The Volcengine recording-file ASR path needs a speech resource in addition to the general API key. Flash mode normally uses `volc.bigasr.auc_turbo`; standard mode normally uses `volc.seedasr.auc`.
    - Store keys only through a local terminal prompt or existing `~/.openclaw/secrets/volcengine.env`; never ask the user to paste keys into chat.
    - The helper may run `openclaw-doubao-asr --self-check` without uploading audio.
    - Before transcribing a real local audio file, confirm with the user that the selected audio will be uploaded to Volcengine.
@@ -884,7 +884,7 @@ Keep the model boundary clear:
 
 - Doubao text models are useful for transcript analysis, taxonomy review, tone/style summaries, and fallback reasoning.
 - Ark chat model calls are not a reliable substitute for native audio understanding unless the current provider explicitly supports that input shape.
-- Volcengine recording-file ASR is a speech endpoint. It needs an enabled ASR resource such as `volc.bigasr.auc_turbo`; a general API key alone may only prove text models work.
+- Volcengine recording-file ASR is a speech endpoint. It needs enabled ASR resources in addition to the general API key. Flash mode normally uses `volc.bigasr.auc_turbo`; standard mode normally uses `volc.seedasr.auc`.
 - Gemini can still be used for native audio understanding when the task needs more than transcription.
 
 When this skill bundle includes:
@@ -907,6 +907,10 @@ The installer should:
    - `VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`
    - `VOLCENGINE_ASR_ENDPOINT=https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash`
    - `VOLCENGINE_ASR_MODEL_NAME=bigmodel`
+   - `VOLCENGINE_STANDARD_RESOURCE_ID=volc.seedasr.auc`
+   - `VOLCENGINE_STANDARD_SUBMIT_ENDPOINT=https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit`
+   - `VOLCENGINE_STANDARD_QUERY_ENDPOINT=https://openspeech.bytedance.com/api/v3/auc/bigmodel/query`
+   - `VOLCENGINE_STANDARD_MODEL_NAME=bigmodel`
 3. Preserve existing key variables and never print them.
 4. Run `openclaw-doubao-asr --self-check`.
 
@@ -919,7 +923,7 @@ For key handling:
 Before running an actual transcription command, explain and confirm the data transfer:
 
 ```text
-This will upload <audio path> to Volcengine for ASR. Continue?
+This will send <audio path or URL> to Volcengine for ASR. Continue?
 ```
 
 Only after the user approves, run:
@@ -927,6 +931,7 @@ Only after the user approves, run:
 ```bash
 openclaw-doubao-asr /path/to/audio.wav --output result.json
 openclaw-doubao-asr --text-only /path/to/audio.wav
+openclaw-doubao-asr --mode standard --url "https://example.com/audio.wav" --wait --output result.json
 ```
 
 If self-check passes but transcription fails:
