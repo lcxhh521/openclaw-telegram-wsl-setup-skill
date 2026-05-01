@@ -21,9 +21,15 @@ namespace OpenClawLocalMonitor
         [STAThread]
         static void Main()
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MonitorForm());
+            bool createdNew;
+            using (var mutex = new System.Threading.Mutex(true, "Local\\OpenClawControlMonitor", out createdNew))
+            {
+                if (!createdNew) return;
+
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new MonitorForm());
+            }
         }
     }
 
