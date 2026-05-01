@@ -55,7 +55,7 @@ namespace OpenClawLocalMonitor
 
         public CloseChoiceDialog(Icon icon)
         {
-            Text = "关闭 OpenClaw 监控面板";
+            Text = "关闭 OpenClaw 控制中心";
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -68,7 +68,7 @@ namespace OpenClawLocalMonitor
 
             var title = new Label
             {
-                Text = "关闭监控面板？",
+                Text = "关闭控制中心？",
                 Left = 22,
                 Top = 18,
                 Width = 360,
@@ -216,14 +216,18 @@ namespace OpenClawLocalMonitor
         DataGridView taskGrid;
         ListBox sessionList;
         ListBox logList;
+        Button openControlButton;
         NotifyIcon trayIcon;
         ContextMenuStrip trayMenu;
         bool allowExit;
         bool trayNoticeShown;
+        bool startAttempted;
+        bool startingOpenClaw;
+        string startupNote = "";
 
         public MonitorForm()
         {
-            Text = "OpenClaw 监控面板";
+            Text = "OpenClaw 控制中心";
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(1000, 760);
             ClientSize = new Size(1220, 900);
@@ -241,7 +245,11 @@ namespace OpenClawLocalMonitor
             timer.Interval = 12000;
             timer.Tick += async (s, e) => await RefreshAsync();
             timer.Start();
-            Shown += async (s, e) => await RefreshAsync();
+            Shown += async (s, e) =>
+            {
+                await EnsureOpenClawStartedAsync();
+                await RefreshAsync();
+            };
             FormClosing += OnFormClosing;
         }
 
@@ -330,13 +338,14 @@ namespace OpenClawLocalMonitor
         {
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("显示面板", null, (s, e) => ShowFromTray());
+            trayMenu.Items.Add("打开 Control", null, (s, e) => OpenControl());
             trayMenu.Items.Add("立即刷新", null, async (s, e) =>
             {
                 ShowFromTray();
                 await RefreshAsync();
             });
             trayMenu.Items.Add(new ToolStripSeparator());
-            trayMenu.Items.Add("退出监控面板", null, (s, e) =>
+            trayMenu.Items.Add("退出控制中心", null, (s, e) =>
             {
                 allowExit = true;
                 trayIcon.Visible = false;
@@ -345,7 +354,7 @@ namespace OpenClawLocalMonitor
 
             trayIcon = new NotifyIcon
             {
-                Text = "OpenClaw 监控面板",
+                Text = "OpenClaw 控制中心",
                 Icon = Icon,
                 Visible = true,
                 ContextMenuStrip = trayMenu
@@ -360,7 +369,7 @@ namespace OpenClawLocalMonitor
             if (!trayNoticeShown)
             {
                 trayNoticeShown = true;
-                trayIcon.ShowBalloonTip(1800, "OpenClaw 监控面板", "已在后台托盘运行。双击图标可打开。", ToolTipIcon.Info);
+                trayIcon.ShowBalloonTip(1800, "OpenClaw 控制中心", "已在后台托盘运行。双击图标可打开。", ToolTipIcon.Info);
             }
         }
 
@@ -374,11 +383,24 @@ namespace OpenClawLocalMonitor
 
         void BuildUi()
         {
-            Controls.Add(MakeLabel("OpenClaw 监控面板", 28, 20, 360, 34, 20f, Color.FromArgb(15, 23, 42), true));
-            Controls.Add(MakeLabel("本机只读状态中心：运行、Telegram、任务、Token 和成本流向", 30, 56, 720, 24, 9f, Color.FromArgb(100, 116, 139), false));
+            Controls.Add(MakeLabel("OpenClaw 控制中心", 28, 20, 360, 34, 20f, Color.FromArgb(15, 23, 42), true));
+            Controls.Add(MakeLabel("本机状态中心：启动、运行、Telegram、任务、Token 和成本流向", 30, 56, 720, 24, 9f, Color.FromArgb(100, 116, 139), false));
 
             updated = MakeLabel("等待首次刷新...", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
             Controls.Add(updated);
+            openControlButton = new Button
+            {
+                Text = "打开 Control",
+                Location = new Point(962, 20),
+                Size = new Size(112, 36),
+                BackColor = Color.FromArgb(15, 23, 42),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            openControlButton.FlatAppearance.BorderSize = 0;
+            openControlButton.Click += (s, e) => OpenControl();
+            Controls.Add(openControlButton);
+
             refreshButton = new Button
             {
                 Text = "刷新",
@@ -477,7 +499,8 @@ namespace OpenClawLocalMonitor
                 var clientHeight = Math.Max(680, ClientSize.Height);
 
                 refreshButton.SetBounds(margin + contentWidth - 92, 20, 92, 36);
-                updated.SetBounds(Math.Max(margin, margin + contentWidth - 340), 28, 230, 24);
+                openControlButton.SetBounds(margin + contentWidth - 220, 20, 112, 36);
+                updated.SetBounds(Math.Max(margin, margin + contentWidth - 470), 28, 230, 24);
 
                 var hero = Controls.OfType<RoundedPanel>().FirstOrDefault(p => p.Controls.Contains(heroTitle));
                 if (hero != null)
@@ -601,7 +624,7 @@ namespace OpenClawLocalMonitor
         {
             if (refreshing) return;
             refreshing = true;
-            updated.Text = "刷新中...";
+            updated.Text = startingOpenClaw ? "启动中..." : "刷新中...";
             refreshButton.Enabled = false;
             try
             {
@@ -617,6 +640,60 @@ namespace OpenClawLocalMonitor
             {
                 refreshing = false;
                 refreshButton.Enabled = true;
+            }
+        }
+
+        async Task EnsureOpenClawStartedAsync()
+        {
+            if (startAttempted || startingOpenClaw) return;
+            startAttempted = true;
+            startingOpenClaw = true;
+            startupNote = "正在启动 OpenClaw...";
+            updated.Text = startupNote;
+            try
+            {
+                var result = await Task.Run(() => StartOpenClawGateway());
+                startupNote = result.Ok
+                    ? "OpenClaw 已启动，正在检查 Telegram。"
+                    : "已尝试启动 OpenClaw；如果仍异常，请查看状态卡片。";
+            }
+            finally
+            {
+                startingOpenClaw = false;
+            }
+        }
+
+        CommandResult StartOpenClawGateway()
+        {
+            var script =
+                "systemctl --user start openclaw-gateway.service >/dev/null 2>&1 || true\n" +
+                "pgrep -af 'openclaw-manual-keepalive' >/dev/null 2>&1 || (nohup bash -lc 'exec -a openclaw-manual-keepalive sleep infinity' >/dev/null 2>&1 &)\n" +
+                "for i in $(seq 1 45); do openclaw gateway probe >/dev/null 2>&1 && exit 0; sleep 1; done\n" +
+                "exit 1";
+            return RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", script }, 60000);
+        }
+
+        void OpenControl()
+        {
+            try
+            {
+                var script = Path.Combine(Application.StartupPath, "Start-OpenClaw.ps1");
+                if (File.Exists(script))
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "powershell.exe",
+                        Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArg(script),
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                    return;
+                }
+                Process.Start("http://127.0.0.1:18789/");
+            }
+            catch (Exception ex)
+            {
+                statusLine.Text = "打开 Control 失败：" + ex.Message;
             }
         }
 
@@ -676,8 +753,10 @@ namespace OpenClawLocalMonitor
                 snapshot.State = "Working";
 
             snapshot.StatusLine = string.IsNullOrWhiteSpace(snapshot.StatusLine)
-                ? snapshot.GatewayText + " | 只读 | 每 12 秒刷新"
+                ? snapshot.GatewayText + " | 每 12 秒刷新"
                 : snapshot.StatusLine;
+            if (!string.IsNullOrWhiteSpace(startupNote) && snapshot.GatewayOk)
+                snapshot.StatusLine = startupNote + " | " + snapshot.StatusLine;
             return snapshot;
         }
 
@@ -1270,7 +1349,7 @@ namespace OpenClawLocalMonitor
         {
             if (s.State == "Problem")
             {
-                if (!s.GatewayOk) return "监控面板连不上网关。请检查 WSL 或 OpenClaw gateway。";
+                if (!s.GatewayOk) return "控制中心连不上网关。请检查 WSL 或 OpenClaw gateway。";
                 if (!s.TelegramOk) return "网关可连接，但 Telegram 未连接或未配置。";
                 if (s.AuditErrors > 0) return "任务审计有错误。请查看提醒和日志。";
                 return "有项目需要处理。";

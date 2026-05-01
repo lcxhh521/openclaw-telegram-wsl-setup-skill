@@ -217,13 +217,14 @@ Codex may be able to infer and run the right install commands from the current e
 10. Verify `openclaw gateway probe`.
    - Do not continue to Telegram until gateway responds, not merely listens.
 
-11. Install or verify the local OpenClaw Monitor panel on Windows when this skill bundle includes `tools/openclaw-local-monitor`.
-   - Treat the panel as optional but recommended infrastructure after gateway/model/keepalive are healthy.
-   - The monitor is read-only and should not store tokens, auth profiles, logs, or raw OpenClaw config.
+11. Install or verify the local OpenClaw Control Center on Windows when this skill bundle includes `tools/openclaw-local-monitor`.
+   - Treat the control center as optional but recommended infrastructure after gateway/model/keepalive are healthy.
+   - It is the single user-facing desktop entry: opening it should wake WSL, start the OpenClaw gateway if needed, then show local status. Do not keep a separate `OpenClaw 启动` shortcut.
+   - The panel must not store tokens, auth profiles, logs, or raw OpenClaw config. Its `打开 Control` helper may resolve the gateway token locally and pass it only as a transient browser URL fragment so the user does not have to paste the gateway token manually.
    - Build it locally on Windows from source; do not download or run third-party binaries.
-   - Install it to a user-local path such as `%LOCALAPPDATA%\OpenClawMonitor`, create a Startup-folder shortcut, and start it as a tray-capable app.
+   - Install it to a user-local path such as `%LOCALAPPDATA%\OpenClawMonitor`, create a Startup-folder shortcut named `OpenClaw Control.lnk`, remove old `OpenClaw Monitor` / `OpenClaw 启动` shortcuts, and start it as a tray-capable app.
    - Explain its backend-work meaning: the "后台任务" count should come from `queued/running` tasks, active/blocked/cancel-requested TaskFlow pressure, and clearly labeled local daemon/workspace artifact heartbeat. Recent Telegram/session activity is only context and must not be presented as a running background task by itself.
-   - Verify the panel opens and can be minimized/closed to the system tray.
+   - Verify the control center opens, starts OpenClaw when needed, can open browser Control without manual gateway-token entry, and can be minimized/closed to the system tray.
 
 12. If the user wants local audio recognition through Doubao/Volcengine, install or verify the helper in `tools/openclaw-doubao-asr`.
    - Treat this as a separate ASR adapter, not as model routing.
@@ -820,15 +821,15 @@ wsl -d Ubuntu -- bash -lc 'systemctl --user restart openclaw-gateway.service'
 
 Prefer the WSL timer when the user wants continuous recovery without configuring Windows event triggers.
 
-## Local OpenClaw Monitor Panel
+## Local OpenClaw Control Center
 
-After OpenClaw is installed, the gateway is reachable, the model is verified, and keepalive/autostart is in place, install the local Windows monitor panel when the skill bundle includes:
+After OpenClaw is installed, the model is verified, and keepalive/autostart is in place, install the local Windows control center when the skill bundle includes:
 
 ```text
 tools/openclaw-local-monitor/
 ```
 
-The panel is a user-local, read-only Windows utility. It should help the user answer:
+The control center is the user-local Windows entry point. It should start or wake OpenClaw, then help the user answer:
 
 - Is the gateway reachable?
 - Is Telegram connected?
@@ -842,7 +843,8 @@ Important semantics:
 - "后台任务" means real backend work: `openclaw tasks list --json` entries with `status=queued` or `status=running`, TaskFlow pressure from `openclaw tasks flow list` where active/blocked/cancel-requested is nonzero, plus clearly labeled local daemon/workspace artifact heartbeat when OpenClaw is producing local learning artifacts outside the task registry.
 - Recent Telegram messages, recently updated sessions, or token growth are not enough to say a background task is running. Show them only as context unless there is also a task, TaskFlow pressure, daemon, or artifact heartbeat.
 - Cost shown in the panel is OpenClaw's local recorded/estimated `usage.cost` from this calendar month's session logs. It resets naturally at the start of each calendar month, helps explain model spend direction, but is not a provider invoice and must not be described as guaranteed billing truth.
-- The panel must stay read-only. It must not edit OpenClaw config, auth profiles, tokens, provider keys, channel settings, or gateway service files.
+- The control center may start `openclaw-gateway.service`, keep WSL awake, and open the browser-based Control UI. It must not edit OpenClaw config, auth profiles, tokens, provider keys, channel settings, or gateway service files.
+- The `打开 Control` path should use `Start-OpenClaw.ps1` as an internal helper. That helper may resolve the gateway token locally and pass it as a temporary browser URL fragment; it must not create a token-bearing shortcut, print the token, or commit it to the repository.
 - The panel must not print or store secrets.
 - The compiled `.exe` is a local build artifact. Do not commit it to the skill repo.
 
@@ -856,9 +858,10 @@ What the installer should do:
 
 1. Copy monitor source/assets into `%LOCALAPPDATA%\OpenClawMonitor`.
 2. Build `OpenClawMonitor.exe` with the built-in .NET Framework compiler.
-3. Create a Startup-folder shortcut named `OpenClaw Monitor.lnk`.
-4. Start the monitor.
-5. Verify that the window opens, shows the custom icon, and minimizes/closes to the system tray.
+3. Create a Startup-folder shortcut named `OpenClaw Control.lnk`.
+4. Remove old `OpenClaw Monitor` and `OpenClaw 启动` shortcuts from Desktop, Start Menu, and Startup when present.
+5. Start the control center.
+6. Verify that the window opens, shows the custom icon, starts OpenClaw if needed, opens browser Control without manual gateway-token entry, and minimizes/closes to the system tray.
 
 Manual build command if needed:
 

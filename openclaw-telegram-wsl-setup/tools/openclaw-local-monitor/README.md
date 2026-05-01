@@ -1,15 +1,15 @@
-# OpenClaw Local Monitor
+# OpenClaw 控制中心
 
-Windows local monitor panel for an OpenClaw gateway running in Ubuntu on WSL2.
+Windows 本机小程序面板，用于启动并观察运行在 Ubuntu on WSL2 里的 OpenClaw gateway。
 
-It is intentionally read-only. It shows:
+它是桌面上的唯一主入口。打开后会自动尝试唤醒 WSL、启动 `openclaw-gateway.service`，并显示：
 
-- gateway and Telegram readiness
-- strict background task state from `openclaw tasks list` and TaskFlow pressure
-- token/context snapshots from `openclaw status --json`
-- local recorded cost from session `usage.cost`, grouped by model
-- recent sessions and Telegram/error notices
-- system tray behavior so the panel can stay in the background
+- gateway 和 Telegram 是否就绪
+- `openclaw tasks list` 与 TaskFlow 里的后台任务状态
+- `openclaw status --json` 中的 token/context 快照
+- 从 session `usage.cost` 汇总的本月本地记录成本，按模型展示
+- 最近会话和 Telegram / 错误提醒
+- 托盘常驻能力
 
 ## Install From The Skill
 
@@ -28,18 +28,15 @@ The installer copies the monitor into:
 Then it builds `OpenClawMonitor.exe`, creates a Startup-folder shortcut, and starts the panel.
 It also creates desktop and Start Menu shortcuts for:
 
-- `OpenClaw Monitor`: opens the read-only monitor panel.
-- `OpenClaw 启动`: starts the WSL OpenClaw gateway keepalive and opens the local OpenClaw page.
+- `OpenClaw Control`: opens the local control center. It starts OpenClaw if needed, then shows the local panel.
 
-## Start OpenClaw Manually
+The installer removes old separate `OpenClaw Monitor`, `OpenClaw 启动`, and other old `OpenClaw*.lnk` shortcuts in the same shortcut folders, because the control center is now the only main entry.
 
-If Windows has started but OpenClaw is not awake yet, use the `OpenClaw 启动` shortcut, or run:
+## Open The Browser Control
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-OpenClaw.ps1
-```
+The local panel has an `打开 Control` button. Use it only when you need the original browser-based OpenClaw Control UI. The helper script `Start-OpenClaw.ps1` is kept as an internal launcher for that button, not as a separate desktop entry.
 
-The launcher starts `openclaw-gateway.service` inside Ubuntu on WSL2, keeps WSL awake with a hidden keepalive process, waits briefly for `openclaw gateway probe`, and opens `http://127.0.0.1:18789/chat?session=main`.
+That helper resolves the gateway token locally and opens the browser Control URL with a temporary `#token=...` fragment when OpenClaw exposes one. The token is not committed, printed to chat, or stored as a shortcut argument.
 
 ## Build Manually
 
@@ -65,7 +62,6 @@ This removes only the Startup shortcut. It does not delete the monitor folder.
 
 ## Notes
 
-- Do not commit the compiled `OpenClawMonitor.exe`.
 - Do not store OpenClaw tokens, API keys, auth profiles, or logs in this folder.
 - Cost shown by the panel comes from local OpenClaw session usage records. Treat it as OpenClaw's recorded/estimated model cost, not as a replacement for provider billing pages.
 - The panel assumes the WSL distro is named `Ubuntu` and that `openclaw` is available on the WSL user's login-shell `PATH`; adjust `OpenClawMonitor.cs` before building if the target machine differs.
