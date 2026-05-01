@@ -949,6 +949,15 @@ python3 /path/to/tools/openclaw-optional-apis/Verify-TavilyKey.py
 
 If direct verification succeeds but OpenClaw still reports unavailable embeddings or web search, inspect the active config shape and restart status before asking the user to replace keys. Common causes are: gateway not restarted after env drop-in changes, raw `env:...` strings instead of SecretRefs, endpoint/network interruption, or provider-side rate/region blocking.
 
+For Jina specifically, distinguish "actual query works" from "`deep status` health probe fails":
+
+- If `memory search` returns results but `openclaw memory status --deep` reports `fetch failed`, `other side closed`, or `Client network socket disconnected before secure TLS connection was established`, check for the OpenClaw 2026.4.26 CLI entry false-negative before changing keys.
+- The known failure path is: the new `entry.js` bootstrap treats `memory` as a normal CLI command and eagerly warms the model context-window cache. That can start Codex/OpenAI model-discovery network requests in parallel with the Jina embedding probe, especially under WSL proxy/TUN setups, and make the health probe fail even though Jina itself is usable.
+- Use `tools/openclaw-optional-apis/Repair-OpenClawMemoryDeepStatus.ps1` or its WSL helper `repair-openclaw-memory-deep-status.py`. The helper adds `memory` to OpenClaw's eager-warmup skip list, backs up the installed context file, and does not touch secrets, proxy settings, gateway config, or the control center.
+- After repair, verify both:
+  - `openclaw memory status --deep --json` should show `embeddingProbe.ok: true`.
+  - `openclaw memory search --query "OpenClaw" --max-results 3 --json` should return results.
+
 ## Doubao / Volcengine ASR Helper
 
 Use this section when the user wants OpenClaw to process local audio through Doubao/Volcengine, especially after a Gemini audio path is unavailable or too limited.

@@ -104,8 +104,10 @@ Windows
         `-- openclaw-optional-apis/
             |-- Set-JinaApiKey.ps1
             |-- Set-TavilyApiKey.ps1
+            |-- Repair-OpenClawMemoryDeepStatus.ps1
             |-- save-openclaw-jina-key.sh
             |-- save-openclaw-tavily-key.sh
+            |-- repair-openclaw-memory-deep-status.py
             |-- Verify-JinaKey.py
             `-- Verify-TavilyKey.py
 ```
@@ -168,6 +170,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Set-TavilyApiKey.ps1
 ```
 
 脚本会把 key 保存到 `~/.openclaw/secrets/jina.env` 或 `~/.openclaw/secrets/tavily.env`，并把 OpenClaw 配置指向环境变量 SecretRef。这里有一个容易踩坑的点：Jina 的 `memorySearch.remote.apiKey` 不能写成普通字符串 `env:JINA_API_KEY`，而应该用 OpenClaw 的 SecretRef 形式，否则运行时可能把这段字符串当成真正的 API key 发出去，导致看起来像 “Jina 401 Invalid API key”。
+
+如果实际 `memory search` 已经可用，但 `openclaw memory status --deep` 里的 embedding 健康检查仍报 `fetch failed` / TLS socket disconnected，先不要让用户反复换 key。OpenClaw 2026.4.26 的新 CLI 入口可能会在 `memory` 命令启动时提前预热模型上下文窗口缓存，触发模型发现网络请求，并和 Jina embedding 探针同时走代理，造成健康检查误报。可以运行：
+
+```powershell
+cd .\openclaw-telegram-wsl-setup\tools\openclaw-optional-apis
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Repair-OpenClawMemoryDeepStatus.ps1
+```
+
+然后验证：
+
+```bash
+set -a; . ~/.openclaw/secrets/jina.env; set +a
+openclaw memory status --deep --json
+openclaw memory search --query "OpenClaw" --max-results 3 --json
+```
 
 默认不重启 gateway；如果用户希望立刻生效，再选择重启。否则下次 OpenClaw gateway 重启或电脑重启后自然生效。
 
