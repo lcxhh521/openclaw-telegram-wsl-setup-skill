@@ -50,9 +50,11 @@ When restoring from the system tray or the Windows taskbar, the window should re
 
 ## Clash Safe Mode
 
-The panel includes a `Clash 安全模式` option for Clash Verge Rev users who need TUN on while keeping WeChat and domestic traffic usable.
+The panel includes a `Clash 安全模式` option for Clash Verge Rev users who need TUN/global-style routing for OpenClaw, Codex, or other foreign large-model providers while keeping WeChat and domestic links usable.
 
-When enabled, the monitor talks to the local Mihomo named pipe exposed by Clash Verge Rev and keeps the core in rule mode if it is switched to global mode. This lets OpenClaw/Codex follow the selected `GLOBAL` proxy group while WeChat and domestic traffic can continue to use direct/rule routing. Switching proxy nodes should happen inside the `GLOBAL` group in Clash Verge Rev; the monitor does not pin a specific country or node.
+Use it when turning on Clash Verge global mode or TUN makes domestic apps, Tencent/WeChat traffic, or China-region websites stop working. When enabled, the monitor talks to the local Mihomo named pipe exposed by Clash Verge Rev and keeps the core in rule mode if it is switched to global mode. This lets OpenClaw/Codex follow the selected `GLOBAL` proxy group while WeChat and domestic traffic can continue to use direct/rule routing. Switching proxy nodes should happen inside the `GLOBAL` group in Clash Verge Rev; the monitor does not pin a specific country or node.
+
+If Clash Verge is already in rule mode and domestic apps work normally, or if the user is not using TUN/global-style routing for foreign model providers, this option is usually unnecessary. Leaving it off will not affect OpenClaw's normal gateway, Telegram, or local monitor behavior.
 
 This option does not store proxy subscriptions, tokens, auth profiles, provider keys, or raw Clash config in the repository.
 

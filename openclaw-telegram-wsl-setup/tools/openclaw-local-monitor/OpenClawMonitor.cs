@@ -552,7 +552,7 @@ namespace OpenClawLocalMonitor
                 SyncClashSafeModeUi();
                 await EnsureClashSafeModeAsync(true);
             };
-            AddBoundedHoverTip(clashSafeModeCheck, "开启后，OpenClaw/Codex 跟随 GLOBAL 节点，微信和国内连接按规则直连。");
+            AddBoundedHoverTip(clashSafeModeCheck, "用于开全局/TUN 后国内应用或链接受影响的场景；没开全局/TUN 时通常不用开启，开启后 OpenClaw/Codex 跟随 GLOBAL，微信和国内连接按规则直连。");
             Controls.Add(clashSafeModeCheck);
 
             refreshButton = new Button
