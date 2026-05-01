@@ -225,6 +225,8 @@ namespace OpenClawLocalMonitor
         bool trayNoticeShown;
         bool startAttempted;
         bool startingOpenClaw;
+        bool wasMinimized;
+        bool smoothRestorePending;
         string startupNote = "";
 
         public MonitorForm()
@@ -234,6 +236,9 @@ namespace OpenClawLocalMonitor
             MinimumSize = new Size(1000, 760);
             ClientSize = new Size(1220, 900);
             AutoScroll = true;
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            UpdateStyles();
             BackColor = Color.FromArgb(246, 248, 252);
             ForeColor = Color.FromArgb(31, 41, 55);
             Font = new Font("Microsoft YaHei UI", 9f);
@@ -241,7 +246,7 @@ namespace OpenClawLocalMonitor
             if (File.Exists(iconPath)) Icon = new Icon(iconPath);
 
             BuildUi();
-            Resize += (s, e) => LayoutUi();
+            Resize += (s, e) => OnMonitorResize();
             SetupTray();
             closePreference = LoadClosePreference();
             timer.Interval = 12000;
@@ -253,6 +258,30 @@ namespace OpenClawLocalMonitor
                 await RefreshAsync(false);
             };
             FormClosing += OnFormClosing;
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED: paint child controls into one frame.
+                return cp;
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_SYSCOMMAND = 0x0112;
+            const int SC_RESTORE = 0xF120;
+
+            if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_RESTORE)
+                BeginSmoothRestore();
+
+            base.WndProc(ref m);
+
+            if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_RESTORE)
+                FinishSmoothRestore(true);
         }
 
         void OnFormClosing(object sender, FormClosingEventArgs e)
@@ -377,10 +406,48 @@ namespace OpenClawLocalMonitor
 
         void ShowFromTray()
         {
+            BeginSmoothRestore();
             ShowInTaskbar = true;
-            Show();
             WindowState = FormWindowState.Normal;
-            Activate();
+            Show();
+            FinishSmoothRestore(true);
+        }
+
+        void OnMonitorResize()
+        {
+            if (WindowState == FormWindowState.Minimized)
+            {
+                wasMinimized = true;
+                return;
+            }
+
+            LayoutUi();
+            if (wasMinimized)
+            {
+                BeginSmoothRestore();
+                FinishSmoothRestore(false);
+                wasMinimized = false;
+            }
+        }
+
+        void BeginSmoothRestore()
+        {
+            if (smoothRestorePending) return;
+            smoothRestorePending = true;
+            Opacity = 0;
+        }
+
+        void FinishSmoothRestore(bool activate)
+        {
+            BeginInvoke(new Action(() =>
+            {
+                LayoutUi();
+                Invalidate(true);
+                Update();
+                Opacity = 1;
+                smoothRestorePending = false;
+                if (activate) Activate();
+            }));
         }
 
         void BuildUi()
@@ -449,7 +516,7 @@ namespace OpenClawLocalMonitor
             AddCostHint();
 
             Controls.Add(MakeLabel("现在在做什么", 28, 486, 260, 24, 12f, Color.FromArgb(15, 23, 42), true));
-            taskGrid = new DataGridView
+            taskGrid = new SmoothDataGridView
             {
                 Location = new Point(28, 516),
                 Size = new Size(1154, 150),
@@ -1716,6 +1783,14 @@ namespace OpenClawLocalMonitor
                 e.Graphics.DrawEllipse(border, rect);
                 e.Graphics.DrawString("i", font, text, rect, format);
             }
+        }
+    }
+
+    sealed class SmoothDataGridView : DataGridView
+    {
+        public SmoothDataGridView()
+        {
+            DoubleBuffered = true;
         }
     }
 

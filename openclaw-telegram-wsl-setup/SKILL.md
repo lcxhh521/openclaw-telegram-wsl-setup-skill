@@ -847,6 +847,7 @@ Important semantics:
 - The `打开 Control` path should use `Start-OpenClaw.ps1` as an internal helper. That helper may resolve the gateway token locally and pass it as a temporary browser URL fragment; it must not create a token-bearing shortcut, print the token, or commit it to the repository.
 - The panel should automatically update display data on its timer. A manual button should not be a meaningless duplicate refresh; label it `重新检测` and make it actively wake WSL/start the gateway before rebuilding the displayed snapshot. It must not reset tasks or change configuration.
 - Add an in-window bounded hover hint to `重新检测` explaining that it wakes WSL, tries to start the gateway, and rereads current status without changing config or resetting tasks. Do not use a native tooltip that can overflow outside the app window.
+- Restoring from tray or the Windows taskbar should not show black or unpainted regions. Use double buffering/composited child painting, intercept restore/minimize paths, and repaint before making the restored window fully visible.
 - The panel must not print or store secrets.
 - The compiled `.exe` is a local build artifact. Do not commit it to the skill repo.
 
