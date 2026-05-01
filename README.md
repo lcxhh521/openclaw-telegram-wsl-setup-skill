@@ -68,6 +68,7 @@ Windows
 - 为 gateway 启动加入宽限期：OpenClaw 启动、补装 bundled runtime dependencies、启动 channels/sidecars 时，watchdog 不应因为 HTTP 探测暂时失败而重启 gateway。
 - 安装本机 OpenClaw 控制中心，用 Windows 原生小程序启动 OpenClaw、显示 gateway、Telegram、后台任务、TaskFlow、本地 daemon/产物心跳、Token/上下文流向、本地记录成本、最近会话和日志提醒，并支持系统托盘常驻。
 - 控制中心可选提供 `Clash 安全模式`：针对为了 OpenClaw/Codex/国外大模型而开启 Clash Verge TUN 或全局式路由后，微信、腾讯服务、国内链接打不开的情况，让大模型流量跟随 `GLOBAL` 节点，同时让国内应用继续按规则直连；如果没有使用全局/TUN，或国内应用本来正常，一般不需要开启。
+- 可选配置 Jina embeddings 和 Tavily web search：Jina 用于 `memorySearch` 语义记忆，Tavily 用于 `web_search` / 定期吸收互联网资料；这两项都不是基础安装必需项，用户不需要就跳过。
 - 增加豆包/火山录音文件识别的本地工具层：通用 API key 可以用于文本模型，但音频识别还需要开通 `volc.bigasr.auc_turbo` 资源，并通过单独 ASR 脚本处理本地音频。
 - 在接入 Telegram 之前，先选择模型并验证 OpenClaw 本地可以正常回复。
 - 管理安装过程中弹出的终端窗口：需要用户操作的窗口保留，不需要的窗口及时关闭。
@@ -100,6 +101,13 @@ Windows
             |-- openclaw-doubao-asr
             |-- Install-DoubaoAsrTool.ps1
             `-- README.md
+        `-- openclaw-optional-apis/
+            |-- Set-JinaApiKey.ps1
+            |-- Set-TavilyApiKey.ps1
+            |-- save-openclaw-jina-key.sh
+            |-- save-openclaw-tavily-key.sh
+            |-- Verify-JinaKey.py
+            `-- Verify-TavilyKey.py
 ```
 
 真正的 Codex skill 仍然是：
@@ -143,6 +151,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-OpenClawMonito
 安装脚本会把源码复制到 `%LOCALAPPDATA%\OpenClawMonitor`，在本机编译 `OpenClawMonitor.exe`，创建 `OpenClaw Control` 桌面、开始菜单和 Startup-folder 快捷方式，清理旧的 `OpenClaw Monitor` / `OpenClaw 启动` 等旧入口，并启动控制中心。仓库不提交任何真实 token、API key、auth profile 或本机日志。
 
 图标是透明背景的可爱红色 OpenClaw 小助手风格，避免使用带黑色背景的截图作为桌面或托盘图标。
+
+## 可选 API 增强：Jina / Tavily
+
+这部分不是基础安装必需项。只有当用户明确需要更强的语义记忆或联网检索时才配置：
+
+- Jina embeddings：给 OpenClaw `memorySearch` 用，负责语义记忆和本地资料检索。
+- Tavily web search：给 OpenClaw `web_search` 用，负责当前网页搜索或定期吸收互联网讨论。
+
+本项目提供本地安全输入脚本，不要把 key 发到聊天里：
+
+```powershell
+cd .\openclaw-telegram-wsl-setup\tools\openclaw-optional-apis
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Set-JinaApiKey.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Set-TavilyApiKey.ps1
+```
+
+脚本会把 key 保存到 `~/.openclaw/secrets/jina.env` 或 `~/.openclaw/secrets/tavily.env`，并把 OpenClaw 配置指向环境变量 SecretRef。这里有一个容易踩坑的点：Jina 的 `memorySearch.remote.apiKey` 不能写成普通字符串 `env:JINA_API_KEY`，而应该用 OpenClaw 的 SecretRef 形式，否则运行时可能把这段字符串当成真正的 API key 发出去，导致看起来像 “Jina 401 Invalid API key”。
+
+默认不重启 gateway；如果用户希望立刻生效，再选择重启。否则下次 OpenClaw gateway 重启或电脑重启后自然生效。
 
 ## 豆包 / 火山录音文件识别
 

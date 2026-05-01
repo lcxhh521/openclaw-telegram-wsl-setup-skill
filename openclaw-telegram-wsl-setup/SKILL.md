@@ -226,7 +226,16 @@ Codex may be able to infer and run the right install commands from the current e
    - Explain its backend-work meaning: the "后台任务" count should come from `queued/running` tasks, active/blocked/cancel-requested TaskFlow pressure, and clearly labeled local daemon/workspace artifact heartbeat. Recent Telegram/session activity is only context and must not be presented as a running background task by itself.
    - Verify the control center opens, starts OpenClaw when needed, can open browser Control without manual gateway-token entry, and can be minimized/closed to the system tray.
 
-12. If the user wants local audio recognition through Doubao/Volcengine, install or verify the helper in `tools/openclaw-doubao-asr`.
+12. If the user wants optional API enhancements, offer Jina embeddings and Tavily web search from `tools/openclaw-optional-apis`.
+   - Treat both as opt-in enhancements, not required OpenClaw infrastructure.
+   - Jina is for `memorySearch` embeddings and semantic memory recall. It is not internet search.
+   - Tavily is for OpenClaw `web_search` / periodic internet absorption. It is not memory embedding.
+   - If the user declines either API, skip it cleanly and continue setup.
+   - Store keys only through local terminal prompts and `~/.openclaw/secrets/*.env`; never ask the user to paste keys into chat.
+   - Configure OpenClaw API keys as real env SecretRef objects using `openclaw config set ... --ref-provider default --ref-source env --ref-id ...`. Do not leave `env:JINA_API_KEY` as a raw string; OpenClaw may send that literal string as the API key and get false 401 errors.
+   - Restart the gateway only after the user agrees, because it can briefly interrupt Telegram and channel startup.
+
+13. If the user wants local audio recognition through Doubao/Volcengine, install or verify the helper in `tools/openclaw-doubao-asr`.
    - Treat this as a separate ASR adapter, not as model routing.
    - Doubao text models can analyze transcripts; Ark chat models should not be described as native local-audio listeners unless the current provider docs prove that exact audio path works.
    - The Volcengine recording-file ASR path needs a speech resource in addition to the general API key. Flash mode normally uses `volc.bigasr.auc_turbo`; standard mode normally uses `volc.seedasr.auc`.
@@ -234,12 +243,12 @@ Codex may be able to infer and run the right install commands from the current e
    - The helper may run `openclaw-doubao-asr --self-check` without uploading audio.
    - Before transcribing a real local audio file, confirm with the user that the selected audio will be uploaded to Volcengine.
 
-13. Configure Telegram using a local token prompt or token file.
+14. Configure Telegram using a local token prompt or token file.
    - Guide the user through BotFather in Telegram if they do not already have a bot.
    - Token entry happens only in the local terminal prompt, never in chat.
    - Close token-entry windows after `openclaw channels status --json --timeout 30000` shows the token/config is available, unless the window is also the active gateway/keepalive path.
 
-14. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
+15. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
    - Explain the 60-120 second startup window.
    - Ask for a fresh message only after Telegram is ready or the startup grace period has passed.
    - Close successful setup windows after end-to-end Telegram reply verification, leaving only intentional hidden/minimized keepalive infrastructure.
@@ -883,6 +892,62 @@ Gateway URL: ws://127.0.0.1:18789
 ```
 
 If the monitor shows no backend task while OpenClaw recently replied in Telegram, explain that these are different signals: queued/running tasks and TaskFlow are authoritative for registered work; local daemon/artifact heartbeat is evidence of local productive work; Telegram/session recency alone is only activity context.
+
+## Optional API Enhancements
+
+Use this section only when the user explicitly wants extra OpenClaw capabilities beyond the base WSL/gateway/Telegram setup. These APIs are optional:
+
+- **Jina embeddings**: enables OpenClaw `memorySearch` semantic recall through an OpenAI-compatible embeddings endpoint.
+- **Tavily web search**: enables OpenClaw `web_search` for current web retrieval or periodic internet absorption workflows.
+
+Do not install either API by default. Ask plainly whether the user wants each one. If they decline, skip it without weakening the normal OpenClaw setup.
+
+When this skill bundle includes:
+
+```text
+tools/openclaw-optional-apis/
+```
+
+use the bundled local prompts instead of asking for keys in chat:
+
+```powershell
+cd .\openclaw-telegram-wsl-setup\tools\openclaw-optional-apis
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Set-JinaApiKey.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Set-TavilyApiKey.ps1
+```
+
+Key handling rules:
+
+- Save Jina to `~/.openclaw/secrets/jina.env` as `JINA_API_KEY`.
+- Save Tavily to `~/.openclaw/secrets/tavily.env` as `TAVILY_API_KEY`.
+- Add user-systemd drop-ins under `~/.config/systemd/user/openclaw-gateway.service.d/`.
+- Keep the files `0600` and never print or commit the key values.
+- Default to not restarting the gateway; restart only after the user agrees.
+
+OpenClaw configuration rules:
+
+- For Jina, use:
+  - `agents.defaults.memorySearch.enabled=true`
+  - `agents.defaults.memorySearch.provider=openai`
+  - `agents.defaults.memorySearch.model=jina-embeddings-v4`
+  - `agents.defaults.memorySearch.remote.baseUrl=https://api.jina.ai/v1`
+  - `agents.defaults.memorySearch.remote.apiKey` as a real SecretRef object: `--ref-provider default --ref-source env --ref-id JINA_API_KEY`
+  - `agents.defaults.memorySearch.fallback=none`
+  - `agents.defaults.memorySearch.remote.batch.enabled=false`
+- Do not configure Jina as a raw string such as `env:JINA_API_KEY`; that can be treated as the literal API key and produce misleading 401 errors.
+- For Tavily, enable `plugins.entries.tavily.enabled=true`, set `plugins.entries.tavily.config.webSearch.apiKey` as an env SecretRef for `TAVILY_API_KEY`, then set `tools.web.search.enabled=true` and `tools.web.search.provider=tavily`.
+
+Verification:
+
+```bash
+set -a; . ~/.openclaw/secrets/jina.env; set +a
+python3 /path/to/tools/openclaw-optional-apis/Verify-JinaKey.py
+
+set -a; . ~/.openclaw/secrets/tavily.env; set +a
+python3 /path/to/tools/openclaw-optional-apis/Verify-TavilyKey.py
+```
+
+If direct verification succeeds but OpenClaw still reports unavailable embeddings or web search, inspect the active config shape and restart status before asking the user to replace keys. Common causes are: gateway not restarted after env drop-in changes, raw `env:...` strings instead of SecretRefs, endpoint/network interruption, or provider-side rate/region blocking.
 
 ## Doubao / Volcengine ASR Helper
 
