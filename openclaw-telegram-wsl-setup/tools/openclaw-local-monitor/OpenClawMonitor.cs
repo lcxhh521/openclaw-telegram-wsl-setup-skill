@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -6,8 +6,10 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -179,6 +181,7 @@ namespace OpenClawLocalMonitor
         const string OpenClawCommand = "openclaw";
         readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 100 };
         readonly Timer timer = new Timer();
+        readonly Timer clashTimer = new Timer();
         readonly object costLock = new object();
         readonly object artifactLock = new object();
         readonly long monitorStartedAtMs = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
@@ -188,8 +191,11 @@ namespace OpenClawLocalMonitor
         CostSummary cachedCost = new CostSummary();
         bool artifactBaselineReady;
         bool refreshing;
+        bool enforcingClashMode;
         int gatewayProbeFailures;
         ClosePreference closePreference = ClosePreference.Ask;
+        bool clashSafeModeEnabled = true;
+        ToolStripMenuItem clashSafeModeTrayItem;
 
         Label updated;
         Label statusLine;
@@ -198,6 +204,7 @@ namespace OpenClawLocalMonitor
         Label sessionHeader;
         Label logHeader;
         Button refreshButton;
+        CheckBox clashSafeModeCheck;
         RoundedPanel hoverTip;
         Label hoverTipText;
         Card overall;
@@ -245,6 +252,7 @@ namespace OpenClawLocalMonitor
             var iconPath = Path.Combine(Application.StartupPath, "OpenClawMonitor.ico");
             if (File.Exists(iconPath)) Icon = new Icon(iconPath);
 
+            clashSafeModeEnabled = LoadClashSafeModeEnabled();
             BuildUi();
             Resize += (s, e) => OnMonitorResize();
             SetupTray();
@@ -252,8 +260,12 @@ namespace OpenClawLocalMonitor
             timer.Interval = 12000;
             timer.Tick += async (s, e) => await RefreshAsync(false);
             timer.Start();
+            clashTimer.Interval = 2500;
+            clashTimer.Tick += async (s, e) => await EnsureClashSafeModeAsync(false);
+            clashTimer.Start();
             Shown += async (s, e) =>
             {
+                await EnsureClashSafeModeAsync(true);
                 await EnsureOpenClawStartedAsync(false);
                 await RefreshAsync(false);
             };
@@ -349,12 +361,63 @@ namespace OpenClawLocalMonitor
                 var path = SettingsPath();
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 var text = preference == ClosePreference.MinimizeToTray ? "tray" : preference == ClosePreference.Exit ? "exit" : "ask";
-                var data = new Dictionary<string, string> { { "closePreference", text } };
-                File.WriteAllText(path, json.Serialize(data), Encoding.UTF8);
+                var data = LoadSettings();
+                data["closePreference"] = text;
+                SaveSettings(data);
             }
             catch
             {
             }
+        }
+
+        bool LoadClashSafeModeEnabled()
+        {
+            try
+            {
+                var data = LoadSettings();
+                object value;
+                if (!data.TryGetValue("clashSafeMode", out value)) return true;
+                return Convert.ToString(value) != "off";
+            }
+            catch
+            {
+            }
+            return true;
+        }
+
+        void SaveClashSafeModeEnabled(bool enabled)
+        {
+            try
+            {
+                var data = LoadSettings();
+                data["clashSafeMode"] = enabled ? "on" : "off";
+                SaveSettings(data);
+            }
+            catch
+            {
+            }
+        }
+
+        Dictionary<string, object> LoadSettings()
+        {
+            try
+            {
+                var path = SettingsPath();
+                if (!File.Exists(path)) return new Dictionary<string, object>();
+                var data = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+                return data ?? new Dictionary<string, object>();
+            }
+            catch
+            {
+                return new Dictionary<string, object>();
+            }
+        }
+
+        void SaveSettings(Dictionary<string, object> data)
+        {
+            var path = SettingsPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(path, json.Serialize(data), Encoding.UTF8);
         }
 
         static string SettingsPath()
@@ -370,6 +433,8 @@ namespace OpenClawLocalMonitor
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("显示面板", null, (s, e) => ShowFromTray());
             trayMenu.Items.Add("打开 Control", null, (s, e) => OpenControl());
+            clashSafeModeTrayItem = new ToolStripMenuItem("Clash 安全模式", null, async (s, e) => await ToggleClashSafeModeAsync()) { Checked = clashSafeModeEnabled };
+            trayMenu.Items.Add(clashSafeModeTrayItem);
             trayMenu.Items.Add("重新检测", null, async (s, e) =>
             {
                 ShowFromTray();
@@ -469,6 +534,26 @@ namespace OpenClawLocalMonitor
             openControlButton.Click += (s, e) => OpenControl();
             AddBoundedHoverTip(openControlButton, "打开浏览器版 Control，并尽量把浏览器窗口拉到前台。");
             Controls.Add(openControlButton);
+
+            clashSafeModeCheck = new CheckBox
+            {
+                Text = "Clash 安全模式",
+                Location = new Point(398, 27),
+                Size = new Size(140, 24),
+                Checked = clashSafeModeEnabled,
+                BackColor = Color.Transparent,
+                ForeColor = Color.FromArgb(31, 41, 55)
+            };
+            clashSafeModeCheck.CheckedChanged += async (s, e) =>
+            {
+                if (clashSafeModeEnabled == clashSafeModeCheck.Checked) return;
+                clashSafeModeEnabled = clashSafeModeCheck.Checked;
+                SaveClashSafeModeEnabled(clashSafeModeEnabled);
+                SyncClashSafeModeUi();
+                await EnsureClashSafeModeAsync(true);
+            };
+            AddBoundedHoverTip(clashSafeModeCheck, "开启后，OpenClaw/Codex 跟随 GLOBAL 节点，微信和国内连接按规则直连。");
+            Controls.Add(clashSafeModeCheck);
 
             refreshButton = new Button
             {
@@ -626,6 +711,7 @@ namespace OpenClawLocalMonitor
 
                 refreshButton.SetBounds(margin + contentWidth - 92, 20, 92, 36);
                 openControlButton.SetBounds(margin + contentWidth - 230, 20, 112, 36);
+                clashSafeModeCheck.SetBounds(margin + 370, 27, 140, 24);
                 updated.SetBounds(Math.Max(margin, margin + contentWidth - 470), 28, 230, 24);
 
                 var hero = Controls.OfType<RoundedPanel>().FirstOrDefault(p => p.Controls.Contains(heroTitle));
@@ -802,6 +888,123 @@ namespace OpenClawLocalMonitor
                 "for i in $(seq 1 45); do openclaw gateway probe >/dev/null 2>&1 && exit 0; sleep 1; done\n" +
                 "exit 1";
             return RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", script }, 60000);
+        }
+
+        async Task ToggleClashSafeModeAsync()
+        {
+            clashSafeModeEnabled = !clashSafeModeEnabled;
+            SaveClashSafeModeEnabled(clashSafeModeEnabled);
+            SyncClashSafeModeUi();
+            await EnsureClashSafeModeAsync(true);
+        }
+
+        void SyncClashSafeModeUi()
+        {
+            if (clashSafeModeCheck != null && clashSafeModeCheck.Checked != clashSafeModeEnabled)
+                clashSafeModeCheck.Checked = clashSafeModeEnabled;
+            if (clashSafeModeTrayItem != null)
+                clashSafeModeTrayItem.Checked = clashSafeModeEnabled;
+        }
+
+        async Task EnsureClashSafeModeAsync(bool manual)
+        {
+            if (enforcingClashMode) return;
+            if (!clashSafeModeEnabled)
+            {
+                SyncClashSafeModeUi();
+                return;
+            }
+
+            enforcingClashMode = true;
+            try
+            {
+                await Task.Run(() => EnsureClashSafeMode());
+            }
+            catch
+            {
+            }
+            finally
+            {
+                enforcingClashMode = false;
+            }
+        }
+
+        string EnsureClashSafeMode()
+        {
+            var mode = GetClashMode();
+            if (mode == "global")
+            {
+                InvokeMihomoPipe("PATCH", "/configs", "{\"mode\":\"rule\"}");
+                mode = GetClashMode();
+                return mode == "rule" ? "已切回规则模式" : "当前模式：" + mode;
+            }
+            if (mode == "rule") return "已开启：规则 + GLOBAL 节点";
+            if (mode == "direct") return "当前直连，按需切规则";
+            return "当前模式：" + mode;
+        }
+
+        string GetClashMode()
+        {
+            var response = InvokeMihomoPipe("GET", "/configs", "");
+            var match = Regex.Match(response, "\\\"mode\\\":\\\"([^\\\"]+)\\\"");
+            return match.Success ? match.Groups[1].Value : "unknown";
+        }
+
+        string InvokeMihomoPipe(string method, string path, string body)
+        {
+            using (var pipe = new NamedPipeClientStream(".", "verge-mihomo", PipeDirection.InOut))
+            {
+                pipe.Connect(1000);
+                var writer = new StreamWriter(pipe, new UTF8Encoding(false));
+                writer.AutoFlush = true;
+                var reader = new StreamReader(pipe, Encoding.UTF8);
+                var headers = new List<string>
+                {
+                    method + " " + path + " HTTP/1.1",
+                    "Host: localhost",
+                    "Connection: close"
+                };
+                var secret = ResolveMihomoSecret();
+                if (!string.IsNullOrEmpty(secret))
+                    headers.Insert(2, "Authorization: Bearer " + secret);
+                if (!string.IsNullOrEmpty(body))
+                {
+                    headers.Add("Content-Type: application/json");
+                    headers.Add("Content-Length: " + Encoding.UTF8.GetByteCount(body));
+                }
+                writer.Write(string.Join("\r\n", headers) + "\r\n\r\n" + body);
+                return reader.ReadToEnd();
+            }
+        }
+
+        string ResolveMihomoSecret()
+        {
+            var envSecret = Environment.GetEnvironmentVariable("CLASH_VERGE_SECRET");
+            if (!string.IsNullOrEmpty(envSecret)) return envSecret.Trim();
+
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var candidates = new[]
+            {
+                Path.Combine(appData, "io.github.clash-verge-rev.clash-verge-rev", "verge.yaml"),
+                Path.Combine(appData, "io.github.clash-verge-rev.clash-verge", "verge.yaml"),
+                Path.Combine(appData, "clash-verge-rev", "verge.yaml")
+            };
+
+            foreach (var candidate in candidates)
+            {
+                try
+                {
+                    if (!File.Exists(candidate)) continue;
+                    var text = File.ReadAllText(candidate, Encoding.UTF8);
+                    var match = Regex.Match(text, "^\\s*secret\\s*:\\s*[\"']?([^\"'\\r\\n#]+)", RegexOptions.Multiline);
+                    if (match.Success) return match.Groups[1].Value.Trim();
+                }
+                catch
+                {
+                }
+            }
+
+            return "set-your-secret";
         }
 
         void OpenControl()

@@ -48,6 +48,14 @@ Hovering over the button should show this in short form inside the panel itself.
 
 When restoring from the system tray or the Windows taskbar, the window should repaint as one composed frame instead of showing partially black or unpainted regions before content appears.
 
+## Clash Safe Mode
+
+The panel includes a `Clash 安全模式` option for Clash Verge Rev users who need TUN on while keeping WeChat and domestic traffic usable.
+
+When enabled, the monitor talks to the local Mihomo named pipe exposed by Clash Verge Rev and keeps the core in rule mode if it is switched to global mode. This lets OpenClaw/Codex follow the selected `GLOBAL` proxy group while WeChat and domestic traffic can continue to use direct/rule routing. Switching proxy nodes should happen inside the `GLOBAL` group in Clash Verge Rev; the monitor does not pin a specific country or node.
+
+This option does not store proxy subscriptions, tokens, auth profiles, provider keys, or raw Clash config in the repository.
+
 ## Build Manually
 
 ```powershell
