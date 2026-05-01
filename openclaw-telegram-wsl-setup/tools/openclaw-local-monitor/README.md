@@ -38,6 +38,8 @@ The local panel has an `打开 Control` button. Use it only when you need the or
 
 That helper resolves the gateway token locally and opens the browser Control URL with a temporary `#token=...` fragment when OpenClaw exposes one. The token is not committed, printed to chat, or stored as a shortcut argument.
 
+After opening the URL, the helper makes a best-effort attempt to restore and focus the browser window. This gives the user visible feedback whether the browser was minimized, hidden in the background, or not yet open.
+
 ## Recheck Button
 
 The panel updates its display automatically. The `重新检测` button is not a cosmetic refresh; it manually wakes WSL, tries to start the gateway, then rebuilds the displayed snapshot. It does not edit config, reset tasks, or touch tokens.

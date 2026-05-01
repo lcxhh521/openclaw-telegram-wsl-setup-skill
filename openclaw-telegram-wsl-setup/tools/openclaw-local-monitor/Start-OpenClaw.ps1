@@ -4,6 +4,58 @@ $Distro = "Ubuntu"
 $OpenClawUrl = "http://127.0.0.1:18789/chat?session=main"
 $Wsl = Join-Path $env:WINDIR "System32\wsl.exe"
 
+function Ensure-WindowFocusApi {
+    if ("OpenClawWindowFocus" -as [type]) { return }
+
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class OpenClawWindowFocus {
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+}
+
+function Get-BrowserWindowProcesses {
+    $names = @(
+        "msedge", "chrome", "firefox", "brave", "vivaldi", "opera",
+        "Arc", "iexplore", "browser"
+    )
+
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $names -contains $_.ProcessName -and $_.MainWindowHandle -ne 0 } |
+        Sort-Object @{ Expression = "StartTime"; Descending = $true }, Id -ErrorAction SilentlyContinue
+}
+
+function Open-UrlAndFocusBrowser {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    Start-Process $Url
+
+    try {
+        Ensure-WindowFocusApi
+        $deadline = (Get-Date).AddSeconds(6)
+        do {
+            Start-Sleep -Milliseconds 350
+            $browser = Get-BrowserWindowProcesses | Select-Object -First 1
+            if ($browser) {
+                [OpenClawWindowFocus]::ShowWindowAsync($browser.MainWindowHandle, 9) | Out-Null
+                Start-Sleep -Milliseconds 120
+                [OpenClawWindowFocus]::SetForegroundWindow($browser.MainWindowHandle) | Out-Null
+                return
+            }
+        } while ((Get-Date) -lt $deadline)
+    } catch {
+        # Opening the URL is the important part; focus is best-effort because
+        # Windows may deny foreground activation in some desktop states.
+    }
+}
+
 function Get-OpenClawDashboardUrl {
     param([string]$WslPath, [string]$WslDistro)
 
@@ -47,7 +99,7 @@ console.log(url);
 }
 
 if (-not (Test-Path -LiteralPath $Wsl)) {
-    Start-Process $OpenClawUrl
+    Open-UrlAndFocusBrowser $OpenClawUrl
     exit 0
 }
 
@@ -65,7 +117,7 @@ for ($i = 0; $i -lt 12; $i++) {
 
 $DashboardUrl = Get-OpenClawDashboardUrl -WslPath $Wsl -WslDistro $Distro
 if ($DashboardUrl) {
-    Start-Process $DashboardUrl
+    Open-UrlAndFocusBrowser $DashboardUrl
 } else {
-    Start-Process $OpenClawUrl
+    Open-UrlAndFocusBrowser $OpenClawUrl
 }

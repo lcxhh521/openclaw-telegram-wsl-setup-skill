@@ -467,7 +467,7 @@ namespace OpenClawLocalMonitor
             };
             openControlButton.FlatAppearance.BorderSize = 0;
             openControlButton.Click += (s, e) => OpenControl();
-            AddBoundedHoverTip(openControlButton, "打开浏览器版 Control。");
+            AddBoundedHoverTip(openControlButton, "打开浏览器版 Control，并尽量把浏览器窗口拉到前台。");
             Controls.Add(openControlButton);
 
             refreshButton = new Button
@@ -808,6 +808,7 @@ namespace OpenClawLocalMonitor
         {
             try
             {
+                statusLine.Text = "正在打开浏览器版 Control...";
                 var script = Path.Combine(Application.StartupPath, "Start-OpenClaw.ps1");
                 if (File.Exists(script))
                 {
