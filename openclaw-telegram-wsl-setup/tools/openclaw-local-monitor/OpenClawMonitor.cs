@@ -453,7 +453,6 @@ namespace OpenClawLocalMonitor
         void BuildUi()
         {
             Controls.Add(MakeLabel("OpenClaw 控制中心", 28, 20, 360, 34, 20f, Color.FromArgb(15, 23, 42), true));
-            Controls.Add(MakeLabel("本机状态中心：启动、运行、Telegram、任务、Token 和成本流向", 30, 56, 720, 24, 9f, Color.FromArgb(100, 116, 139), false));
 
             updated = MakeLabel("", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
             Controls.Add(updated);
@@ -515,7 +514,7 @@ namespace OpenClawLocalMonitor
             Controls.AddRange(new Control[] { tokenTotal.Panel, tokenInput.Panel, tokenOutput.Panel, tokenCache.Panel, tokenCost.Panel });
             AddCostHint();
 
-            Controls.Add(MakeLabel("现在在做什么", 28, 486, 260, 24, 12f, Color.FromArgb(15, 23, 42), true));
+            Controls.Add(MakeLabel("后台任务状态", 28, 486, 260, 24, 12f, Color.FromArgb(15, 23, 42), true));
             taskGrid = new SmoothDataGridView
             {
                 Location = new Point(28, 516),
