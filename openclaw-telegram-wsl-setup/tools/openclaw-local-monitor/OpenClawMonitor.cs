@@ -408,7 +408,7 @@ namespace OpenClawLocalMonitor
             };
             openControlButton.FlatAppearance.BorderSize = 0;
             openControlButton.Click += (s, e) => OpenControl();
-            toolTip.SetToolTip(openControlButton, "打开浏览器版 OpenClaw Control；本机会临时带上网关令牌。");
+            toolTip.SetToolTip(openControlButton, "打开浏览器版 Control。");
             Controls.Add(openControlButton);
 
             refreshButton = new Button
@@ -422,7 +422,7 @@ namespace OpenClawLocalMonitor
             };
             refreshButton.FlatAppearance.BorderSize = 0;
             refreshButton.Click += async (s, e) => await RefreshAsync(true);
-            toolTip.SetToolTip(refreshButton, "唤醒 WSL、尝试启动网关，并重新读取当前状态；不会改配置或重置任务。");
+            toolTip.SetToolTip(refreshButton, "唤醒 WSL 并重查网关状态，不改配置。");
             Controls.Add(refreshButton);
 
             var hero = new RoundedPanel
