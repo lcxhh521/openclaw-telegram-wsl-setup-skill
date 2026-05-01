@@ -538,7 +538,7 @@ namespace OpenClawLocalMonitor
             };
             openControlButton.FlatAppearance.BorderSize = 0;
             openControlButton.Click += (s, e) => OpenControl();
-            AddBoundedHoverTip(openControlButton, "打开浏览器版 Control，并尽量把浏览器窗口拉到前台。");
+            AddBoundedHoverTip(openControlButton, "打开浏览器版 Control。");
             Controls.Add(openControlButton);
 
             clashSafeModeCheck = new CheckBox
