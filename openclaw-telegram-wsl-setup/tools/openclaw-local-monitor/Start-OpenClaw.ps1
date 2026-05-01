@@ -1,3 +1,7 @@
+param(
+    [switch]$OpenBrowser
+)
+
 $ErrorActionPreference = "SilentlyContinue"
 
 $Distro = "Ubuntu"
@@ -99,7 +103,7 @@ console.log(url);
 }
 
 if (-not (Test-Path -LiteralPath $Wsl)) {
-    Open-UrlAndFocusBrowser $OpenClawUrl
+    if ($OpenBrowser) { Open-UrlAndFocusBrowser $OpenClawUrl }
     exit 0
 }
 
@@ -113,6 +117,10 @@ for ($i = 0; $i -lt 12; $i++) {
     $probe = & $Wsl -d $Distro -- bash -lc "openclaw gateway probe >/dev/null 2>&1 && echo ok || true" 2>$null
     if ($probe -match "ok") { break }
     Start-Sleep -Seconds 1
+}
+
+if (-not $OpenBrowser) {
+    exit 0
 }
 
 $DashboardUrl = Get-OpenClawDashboardUrl -WslPath $Wsl -WslDistro $Distro

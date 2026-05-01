@@ -203,6 +203,7 @@ namespace OpenClawLocalMonitor
         bool clashSafeModeEnabled = true;
         ToolStripMenuItem clashSafeModeTrayItem;
 
+        Label headerTitle;
         Label updated;
         Label statusLine;
         Label tokenHeader;
@@ -271,21 +272,14 @@ namespace OpenClawLocalMonitor
             clashTimer.Start();
             Shown += async (s, e) =>
             {
+                LayoutUi();
+                Invalidate(true);
+                Update();
                 await EnsureClashSafeModeAsync(true);
                 await EnsureOpenClawStartedAsync(false);
                 await RefreshAsync(false);
             };
             FormClosing += OnFormClosing;
-        }
-
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                var cp = base.CreateParams;
-                cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED: paint child controls into one frame.
-                return cp;
-            }
         }
 
         protected override void WndProc(ref Message m)
@@ -523,7 +517,8 @@ namespace OpenClawLocalMonitor
 
         void BuildUi()
         {
-            Controls.Add(MakeLabel("OpenClaw 控制中心", 28, 20, 360, 34, 20f, Color.FromArgb(15, 23, 42), true));
+            headerTitle = MakeLabel("OpenClaw 控制中心", 28, 20, 360, 34, 20f, Color.FromArgb(15, 23, 42), true);
+            Controls.Add(headerTitle);
 
             updated = MakeLabel("", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
             Controls.Add(updated);
@@ -545,7 +540,7 @@ namespace OpenClawLocalMonitor
             {
                 Text = "Clash 安全模式",
                 Location = new Point(398, 27),
-                Size = new Size(140, 24),
+                Size = new Size(180, 24),
                 Checked = clashSafeModeEnabled,
                 BackColor = Color.Transparent,
                 ForeColor = Color.FromArgb(31, 41, 55)
@@ -717,8 +712,21 @@ namespace OpenClawLocalMonitor
 
                 refreshButton.SetBounds(margin + contentWidth - 92, 20, 92, 36);
                 openControlButton.SetBounds(margin + contentWidth - 230, 20, 112, 36);
-                clashSafeModeCheck.SetBounds(margin + 370, 27, 140, 24);
-                updated.SetBounds(Math.Max(margin, margin + contentWidth - 470), 28, 230, 24);
+                var clashLeft = margin + 390;
+                var clashWidth = 180;
+                headerTitle.SetBounds(margin, 20, clashLeft - margin - gap, 34);
+                clashSafeModeCheck.SetBounds(clashLeft, 27, clashWidth, 24);
+
+                var updatedRight = openControlButton.Left - gap;
+                var updatedDesiredWidth = 230;
+                var updatedLeft = updatedRight - updatedDesiredWidth;
+                var minimumUpdatedLeft = clashSafeModeCheck.Right + gap;
+                if (updatedLeft < minimumUpdatedLeft)
+                    updatedLeft = minimumUpdatedLeft;
+                var updatedWidth = updatedRight - updatedLeft;
+                updated.Visible = updatedWidth >= 130;
+                if (updated.Visible)
+                    updated.SetBounds(updatedLeft, 28, Math.Min(updatedDesiredWidth, updatedWidth), 24);
 
                 var hero = Controls.OfType<RoundedPanel>().FirstOrDefault(p => p.Controls.Contains(heroTitle));
                 if (hero != null)
@@ -1024,7 +1032,7 @@ namespace OpenClawLocalMonitor
                     Process.Start(new ProcessStartInfo
                     {
                         FileName = "powershell.exe",
-                        Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArg(script),
+                        Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArg(script) + " -OpenBrowser",
                         UseShellExecute = false,
                         CreateNoWindow = true
                     });
