@@ -42,7 +42,7 @@ That helper resolves the gateway token locally and opens the browser Control URL
 
 The panel updates its display automatically. The `重新检测` button is not a cosmetic refresh; it manually wakes WSL, tries to start the gateway, then rebuilds the displayed snapshot. It does not edit config, reset tasks, or touch tokens.
 
-Hovering over the button should show this in short form so the user understands why the button exists.
+Hovering over the button should show this in short form inside the panel itself. The hint should stay within the app window rather than using a native tooltip that can spill outside the interface.
 
 ## Build Manually
 

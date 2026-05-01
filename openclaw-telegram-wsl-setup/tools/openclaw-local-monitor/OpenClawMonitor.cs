@@ -198,7 +198,8 @@ namespace OpenClawLocalMonitor
         Label sessionHeader;
         Label logHeader;
         Button refreshButton;
-        ToolTip toolTip;
+        RoundedPanel hoverTip;
+        Label hoverTipText;
         Card overall;
         Card gateway;
         Card telegram;
@@ -389,14 +390,6 @@ namespace OpenClawLocalMonitor
 
             updated = MakeLabel("", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
             Controls.Add(updated);
-            toolTip = new ToolTip
-            {
-                AutomaticDelay = 250,
-                AutoPopDelay = 7000,
-                InitialDelay = 250,
-                ReshowDelay = 120,
-                ShowAlways = true
-            };
             openControlButton = new Button
             {
                 Text = "打开 Control",
@@ -408,7 +401,7 @@ namespace OpenClawLocalMonitor
             };
             openControlButton.FlatAppearance.BorderSize = 0;
             openControlButton.Click += (s, e) => OpenControl();
-            toolTip.SetToolTip(openControlButton, "打开浏览器版 Control。");
+            AddBoundedHoverTip(openControlButton, "打开浏览器版 Control。");
             Controls.Add(openControlButton);
 
             refreshButton = new Button
@@ -422,7 +415,7 @@ namespace OpenClawLocalMonitor
             };
             refreshButton.FlatAppearance.BorderSize = 0;
             refreshButton.Click += async (s, e) => await RefreshAsync(true);
-            toolTip.SetToolTip(refreshButton, "唤醒 WSL 并重查网关状态，不改配置。");
+            AddBoundedHoverTip(refreshButton, "唤醒 WSL 并重查网关状态，不改配置。");
             Controls.Add(refreshButton);
 
             var hero = new RoundedPanel
@@ -495,7 +488,63 @@ namespace OpenClawLocalMonitor
             Controls.Add(statusLine);
             legendLine = MakeLabel("绿色=就绪，蓝色=正在工作，黄色=需要留意，红色=需要处理。", 28, 874, 1154, 22, 8.5f, Color.FromArgb(148, 163, 184), false);
             Controls.Add(legendLine);
+            BuildHoverTip();
             LayoutUi();
+        }
+
+        void BuildHoverTip()
+        {
+            hoverTip = new RoundedPanel
+            {
+                Size = new Size(180, 34),
+                BackColor = Color.White,
+                BorderColor = Color.FromArgb(203, 213, 225),
+                Radius = 10,
+                Visible = false
+            };
+            hoverTipText = new Label
+            {
+                Location = new Point(10, 8),
+                Size = new Size(160, 18),
+                AutoEllipsis = true,
+                ForeColor = Color.FromArgb(51, 65, 85),
+                Font = new Font("Microsoft YaHei UI", 8.5f),
+                BackColor = Color.Transparent
+            };
+            hoverTip.Controls.Add(hoverTipText);
+            Controls.Add(hoverTip);
+            hoverTip.BringToFront();
+        }
+
+        void AddBoundedHoverTip(Control target, string text)
+        {
+            target.MouseEnter += (s, e) => ShowBoundedHoverTip(target, text);
+            target.MouseLeave += (s, e) => HideBoundedHoverTip();
+        }
+
+        void ShowBoundedHoverTip(Control target, string text)
+        {
+            if (hoverTip == null || hoverTipText == null) return;
+            hoverTipText.Text = text;
+            var measured = TextRenderer.MeasureText(text, hoverTipText.Font);
+            var width = Math.Min(Math.Max(measured.Width + 24, 150), Math.Max(150, ClientSize.Width - 56));
+            var height = 34;
+            var screenPoint = target.PointToScreen(new Point(0, target.Height + 8));
+            var local = PointToClient(screenPoint);
+            var x = Math.Max(28, Math.Min(local.X, ClientSize.Width - width - 28));
+            var y = local.Y;
+            if (y + height > ClientSize.Height - 28)
+                y = PointToClient(target.PointToScreen(new Point(0, -height - 8))).Y;
+            y = Math.Max(28, y);
+            hoverTip.SetBounds(x, y, width, height);
+            hoverTipText.SetBounds(10, 8, width - 20, 18);
+            hoverTip.Visible = true;
+            hoverTip.BringToFront();
+        }
+
+        void HideBoundedHoverTip()
+        {
+            if (hoverTip != null) hoverTip.Visible = false;
         }
 
         void LayoutUi()
