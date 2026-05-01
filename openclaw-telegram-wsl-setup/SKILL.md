@@ -845,6 +845,8 @@ Important semantics:
 - Cost shown in the panel is OpenClaw's local recorded/estimated `usage.cost` from this calendar month's session logs. It resets naturally at the start of each calendar month, helps explain model spend direction, but is not a provider invoice and must not be described as guaranteed billing truth.
 - The control center may start `openclaw-gateway.service`, keep WSL awake, and open the browser-based Control UI. It must not edit OpenClaw config, auth profiles, tokens, provider keys, channel settings, or gateway service files.
 - The `打开 Control` path should use `Start-OpenClaw.ps1` as an internal helper. That helper may resolve the gateway token locally and pass it as a temporary browser URL fragment; it must not create a token-bearing shortcut, print the token, or commit it to the repository.
+- The panel should automatically update display data on its timer. A manual button should not be a meaningless duplicate refresh; label it `重新检测` and make it actively wake WSL/start the gateway before rebuilding the displayed snapshot. It must not reset tasks or change configuration.
+- Add a short tooltip to `重新检测` explaining that it wakes WSL, tries to start the gateway, and rereads current status without changing config or resetting tasks.
 - The panel must not print or store secrets.
 - The compiled `.exe` is a local build artifact. Do not commit it to the skill repo.
 
@@ -861,7 +863,7 @@ What the installer should do:
 3. Create a Startup-folder shortcut named `OpenClaw Control.lnk`.
 4. Remove old `OpenClaw Monitor` and `OpenClaw 启动` shortcuts from Desktop, Start Menu, and Startup when present.
 5. Start the control center.
-6. Verify that the window opens, shows the custom icon, starts OpenClaw if needed, opens browser Control without manual gateway-token entry, and minimizes/closes to the system tray.
+6. Verify that the window opens, shows the custom icon, starts OpenClaw if needed, opens browser Control without manual gateway-token entry, automatically updates status, offers `重新检测` for active wake/start/probe, and minimizes/closes to the system tray.
 
 Manual build command if needed:
 

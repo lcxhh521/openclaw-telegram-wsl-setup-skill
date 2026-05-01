@@ -123,6 +123,8 @@ openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/
 
 控制中心里的 `打开 Control` 按钮会调用本地 `Start-OpenClaw.ps1`。这个脚本只在本机临时解析 OpenClaw 网关令牌，并生成带 `#token=...` 的浏览器 Control URL；令牌不写进仓库、不打印到聊天、不提交到日志。这样用户不需要每次手动粘贴网关 token。
 
+控制中心会自动更新显示内容。界面上的 `重新检测` 按钮不是普通刷新按钮，而是手动触发一次主动检测：唤醒 WSL、尝试启动 gateway，然后重新读取当前状态。它不修改配置、不重置任务、不碰 token。
+
 安装命令：
 
 ```powershell

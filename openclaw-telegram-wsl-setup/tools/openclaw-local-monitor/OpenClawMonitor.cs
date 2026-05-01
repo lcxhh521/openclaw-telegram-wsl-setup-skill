@@ -198,6 +198,7 @@ namespace OpenClawLocalMonitor
         Label sessionHeader;
         Label logHeader;
         Button refreshButton;
+        ToolTip toolTip;
         Card overall;
         Card gateway;
         Card telegram;
@@ -243,12 +244,12 @@ namespace OpenClawLocalMonitor
             SetupTray();
             closePreference = LoadClosePreference();
             timer.Interval = 12000;
-            timer.Tick += async (s, e) => await RefreshAsync();
+            timer.Tick += async (s, e) => await RefreshAsync(false);
             timer.Start();
             Shown += async (s, e) =>
             {
-                await EnsureOpenClawStartedAsync();
-                await RefreshAsync();
+                await EnsureOpenClawStartedAsync(false);
+                await RefreshAsync(false);
             };
             FormClosing += OnFormClosing;
         }
@@ -339,10 +340,10 @@ namespace OpenClawLocalMonitor
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("显示面板", null, (s, e) => ShowFromTray());
             trayMenu.Items.Add("打开 Control", null, (s, e) => OpenControl());
-            trayMenu.Items.Add("立即刷新", null, async (s, e) =>
+            trayMenu.Items.Add("重新检测", null, async (s, e) =>
             {
                 ShowFromTray();
-                await RefreshAsync();
+                await RefreshAsync(true);
             });
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("退出控制中心", null, (s, e) =>
@@ -386,8 +387,16 @@ namespace OpenClawLocalMonitor
             Controls.Add(MakeLabel("OpenClaw 控制中心", 28, 20, 360, 34, 20f, Color.FromArgb(15, 23, 42), true));
             Controls.Add(MakeLabel("本机状态中心：启动、运行、Telegram、任务、Token 和成本流向", 30, 56, 720, 24, 9f, Color.FromArgb(100, 116, 139), false));
 
-            updated = MakeLabel("等待首次刷新...", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
+            updated = MakeLabel("", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
             Controls.Add(updated);
+            toolTip = new ToolTip
+            {
+                AutomaticDelay = 250,
+                AutoPopDelay = 7000,
+                InitialDelay = 250,
+                ReshowDelay = 120,
+                ShowAlways = true
+            };
             openControlButton = new Button
             {
                 Text = "打开 Control",
@@ -399,11 +408,12 @@ namespace OpenClawLocalMonitor
             };
             openControlButton.FlatAppearance.BorderSize = 0;
             openControlButton.Click += (s, e) => OpenControl();
+            toolTip.SetToolTip(openControlButton, "打开浏览器版 OpenClaw Control；本机会临时带上网关令牌。");
             Controls.Add(openControlButton);
 
             refreshButton = new Button
             {
-                Text = "刷新",
+                Text = "重新检测",
                 Location = new Point(1090, 20),
                 Size = new Size(92, 36),
                 BackColor = Color.FromArgb(37, 99, 235),
@@ -411,7 +421,8 @@ namespace OpenClawLocalMonitor
                 FlatStyle = FlatStyle.Flat
             };
             refreshButton.FlatAppearance.BorderSize = 0;
-            refreshButton.Click += async (s, e) => await RefreshAsync();
+            refreshButton.Click += async (s, e) => await RefreshAsync(true);
+            toolTip.SetToolTip(refreshButton, "唤醒 WSL、尝试启动网关，并重新读取当前状态；不会改配置或重置任务。");
             Controls.Add(refreshButton);
 
             var hero = new RoundedPanel
@@ -499,7 +510,7 @@ namespace OpenClawLocalMonitor
                 var clientHeight = Math.Max(680, ClientSize.Height);
 
                 refreshButton.SetBounds(margin + contentWidth - 92, 20, 92, 36);
-                openControlButton.SetBounds(margin + contentWidth - 220, 20, 112, 36);
+                openControlButton.SetBounds(margin + contentWidth - 230, 20, 112, 36);
                 updated.SetBounds(Math.Max(margin, margin + contentWidth - 470), 28, 230, 24);
 
                 var hero = Controls.OfType<RoundedPanel>().FirstOrDefault(p => p.Controls.Contains(heroTitle));
@@ -620,14 +631,19 @@ namespace OpenClawLocalMonitor
             };
         }
 
-        async Task RefreshAsync()
+        async Task RefreshAsync(bool manualRecovery)
         {
             if (refreshing) return;
             refreshing = true;
-            updated.Text = startingOpenClaw ? "启动中..." : "刷新中...";
+            if (manualRecovery)
+                updated.Text = "重新检测中...";
+            else if (startingOpenClaw)
+                updated.Text = "启动中...";
             refreshButton.Enabled = false;
             try
             {
+                if (manualRecovery)
+                    await EnsureOpenClawStartedAsync(true);
                 var snapshot = await Task.Run(() => BuildSnapshot());
                 Render(snapshot);
             }
@@ -643,19 +659,19 @@ namespace OpenClawLocalMonitor
             }
         }
 
-        async Task EnsureOpenClawStartedAsync()
+        async Task EnsureOpenClawStartedAsync(bool force)
         {
-            if (startAttempted || startingOpenClaw) return;
+            if ((!force && startAttempted) || startingOpenClaw) return;
             startAttempted = true;
             startingOpenClaw = true;
-            startupNote = "正在启动 OpenClaw...";
+            startupNote = force ? "正在重新检测并唤醒 OpenClaw..." : "正在启动 OpenClaw...";
             updated.Text = startupNote;
             try
             {
                 var result = await Task.Run(() => StartOpenClawGateway());
                 startupNote = result.Ok
-                    ? "OpenClaw 已启动，正在检查 Telegram。"
-                    : "已尝试启动 OpenClaw；如果仍异常，请查看状态卡片。";
+                    ? (force ? "已重新检测：OpenClaw gateway 有响应。" : "OpenClaw 已启动，正在检查 Telegram。")
+                    : (force ? "已重新检测：gateway 仍未响应，请查看状态卡片。" : "已尝试启动 OpenClaw；如果仍异常，请查看状态卡片。");
             }
             finally
             {
@@ -753,7 +769,7 @@ namespace OpenClawLocalMonitor
                 snapshot.State = "Working";
 
             snapshot.StatusLine = string.IsNullOrWhiteSpace(snapshot.StatusLine)
-                ? snapshot.GatewayText + " | 每 12 秒刷新"
+                ? snapshot.GatewayText
                 : snapshot.StatusLine;
             if (!string.IsNullOrWhiteSpace(startupNote) && snapshot.GatewayOk)
                 snapshot.StatusLine = startupNote + " | " + snapshot.StatusLine;
@@ -1293,7 +1309,7 @@ namespace OpenClawLocalMonitor
 
         void Render(Snapshot s)
         {
-            updated.Text = "已更新 " + s.GeneratedAt.ToString("HH:mm:ss");
+            updated.Text = "";
             heroTitle.Text = HeroTitle(s);
             heroDetail.Text = HeroDetail(s);
             heroTitle.ForeColor = HeroColor(s);
