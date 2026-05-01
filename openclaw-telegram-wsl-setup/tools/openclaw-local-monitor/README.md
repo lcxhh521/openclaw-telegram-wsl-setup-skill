@@ -26,6 +26,20 @@ The installer copies the monitor into:
 ```
 
 Then it builds `OpenClawMonitor.exe`, creates a Startup-folder shortcut, and starts the panel.
+It also creates desktop and Start Menu shortcuts for:
+
+- `OpenClaw Monitor`: opens the read-only monitor panel.
+- `OpenClaw 启动`: starts the WSL OpenClaw gateway keepalive and opens the local OpenClaw page.
+
+## Start OpenClaw Manually
+
+If Windows has started but OpenClaw is not awake yet, use the `OpenClaw 启动` shortcut, or run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-OpenClaw.ps1
+```
+
+The launcher starts `openclaw-gateway.service` inside Ubuntu on WSL2, keeps WSL awake with a hidden keepalive process, waits briefly for `openclaw gateway probe`, and opens `http://127.0.0.1:18789/chat?session=main`.
 
 ## Build Manually
 
