@@ -10,6 +10,7 @@ $files = @(
     "OpenClawMonitor.ico",
     "OpenClawMonitorIcon.png",
     "Build-OpenClawMonitor.ps1",
+    "Generate-OpenClawMonitorIcon.ps1",
     "Install-Autostart.ps1",
     "Uninstall-Autostart.ps1",
     "Start-OpenClaw.ps1",
@@ -32,6 +33,8 @@ $shell = New-Object -ComObject WScript.Shell
 foreach ($folder in @($desktop, $programs)) {
     Get-ChildItem -LiteralPath $folder -Filter "OpenClaw*.lnk" -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $folder "OpenClaw Dashboard.cmd") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $folder "OpenClaw Dashboard.lnk") -Force -ErrorAction SilentlyContinue
 }
 
 foreach ($shortcutPath in @(

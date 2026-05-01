@@ -848,6 +848,7 @@ Important semantics:
 - The panel should automatically update display data on its timer. A manual button should not be a meaningless duplicate refresh; label it `重新检测` and make it actively wake WSL/start the gateway before rebuilding the displayed snapshot. It must not reset tasks or change configuration.
 - Add an in-window bounded hover hint to `重新检测` explaining that it wakes WSL, tries to start the gateway, and rereads current status without changing config or resetting tasks. Do not use a native tooltip that can overflow outside the app window.
 - Restoring from tray or the Windows taskbar should not show black or unpainted regions. Use double buffering/composited child painting, intercept restore/minimize paths, and repaint before making the restored window fully visible.
+- Use a transparent-background, friendly red OpenClaw-style mascot icon for desktop, taskbar, and tray. Do not use a screenshot or asset with a dark background as the icon.
 - The panel must not print or store secrets.
 - The compiled `.exe` is a local build artifact. Do not commit it to the skill repo.
 

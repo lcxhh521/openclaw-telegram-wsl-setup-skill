@@ -1,5 +1,9 @@
 # OpenClaw 养虾指南（WSL Toolkit）
 
+<p align="center">
+  <img src="openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/OpenClawMonitorIcon.png" alt="OpenClaw cute red mascot" width="120">
+</p>
+
 这是我整理给自己和其他 OpenClaw 用户的一套 Windows/WSL 使用笔记和 Codex skill。
 
 它主要解决一类很烦的问题：OpenClaw 本身能跑，但一接上 Telegram、长期挂后台、电脑重启、WSL 休眠、断网恢复、代理切换、模型认证之后，就开始变得不稳定。很多时候表面现象只是“机器人不回消息”，真正的问题却藏在 gateway、systemd、WSL、token、模型或网络恢复里面。
@@ -85,6 +89,7 @@ Windows
         `-- openclaw-local-monitor/
             |-- OpenClawMonitor.cs
             |-- Build-OpenClawMonitor.ps1
+            |-- Generate-OpenClawMonitorIcon.ps1
             |-- Install-OpenClawMonitor.ps1
             |-- Install-Autostart.ps1
             |-- Uninstall-Autostart.ps1
@@ -133,6 +138,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-OpenClawMonito
 ```
 
 安装脚本会把源码复制到 `%LOCALAPPDATA%\OpenClawMonitor`，在本机编译 `OpenClawMonitor.exe`，创建 `OpenClaw Control` 桌面、开始菜单和 Startup-folder 快捷方式，清理旧的 `OpenClaw Monitor` / `OpenClaw 启动` 等旧入口，并启动控制中心。仓库不提交任何真实 token、API key、auth profile 或本机日志。
+
+图标是透明背景的可爱红色 OpenClaw 小助手风格，避免使用带黑色背景的截图作为桌面或托盘图标。
 
 ## 豆包 / 火山录音文件识别
 

@@ -60,6 +60,14 @@ The build uses the built-in .NET Framework C# compiler:
 
 No external package manager is required.
 
+## Regenerate Icon
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Generate-OpenClawMonitorIcon.ps1
+```
+
+The icon is a transparent-background, friendly red OpenClaw-style mascot for desktop, taskbar, and tray use. Do not use a screenshot with a dark background as the icon.
+
 ## Uninstall Autostart
 
 ```powershell
