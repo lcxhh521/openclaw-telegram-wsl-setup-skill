@@ -33,8 +33,6 @@ $shell = New-Object -ComObject WScript.Shell
 foreach ($folder in @($desktop, $programs)) {
     Get-ChildItem -LiteralPath $folder -Filter "OpenClaw*.lnk" -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $folder "OpenClaw Dashboard.cmd") -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $folder "OpenClaw Dashboard.lnk") -Force -ErrorAction SilentlyContinue
 }
 
 foreach ($shortcutPath in @(
