@@ -1,4 +1,4 @@
-# OpenClaw 养虾指南（WSL Toolkit）
+# OpenClaw 养虾指南
 
 <p align="center">
   <img src="openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/OpenClawMonitorIcon.png" alt="OpenClaw cute red mascot" width="120">
@@ -108,7 +108,7 @@ Windows
 openclaw-telegram-wsl-setup/
 ```
 
-这个目录名暂时保留是为了兼容已经安装的 Codex skill 和旧链接；公开项目名称以 **OpenClaw 养虾指南（WSL Toolkit）** 为准。这个目录应保持干净，只包含 skill 本身需要的文件和可复用工具。不要把本机 OpenClaw 配置、Telegram token、日志、截图、编译产物或机器专属诊断文件放进去。
+这个目录名暂时保留是为了兼容已经安装的 Codex skill 和旧链接；公开项目名称以 **OpenClaw 养虾指南** 为准。这个目录应保持干净，只包含 skill 本身需要的文件和可复用工具。不要把本机 OpenClaw 配置、Telegram token、日志、截图、编译产物或机器专属诊断文件放进去。
 
 ## 本机 OpenClaw 控制中心
 

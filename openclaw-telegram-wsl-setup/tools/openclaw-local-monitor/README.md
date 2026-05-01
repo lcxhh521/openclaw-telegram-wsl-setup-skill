@@ -46,7 +46,7 @@ The panel updates its display automatically. The `重新检测` button is not a 
 
 Hovering over the button should show this in short form inside the panel itself. The hint should stay within the app window rather than using a native tooltip that can spill outside the interface.
 
-When restoring from the system tray or the Windows taskbar, the window should repaint as one composed frame instead of showing partially black or unpainted regions before content appears.
+When restoring from the system tray or the Windows taskbar, the window should force layout and repaint before becoming visible. Avoid `WS_EX_COMPOSITED` full-window compositing for this panel because it can make child controls briefly appear as black or unpainted rectangles during startup or restore.
 
 ## Clash Safe Mode
 
