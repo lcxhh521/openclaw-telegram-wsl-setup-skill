@@ -4,8 +4,6 @@
   <img src="openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/OpenClawMonitorIcon.png" alt="OpenClaw cute red mascot" width="120">
 </p>
 
-> 当前控制中心行为：打开 `OpenClaw Control` 只会显示本机状态，不会自动启动或关闭 OpenClaw。需要运行时点击 `开启 OpenClaw`；运行中按钮会变成 `关闭 OpenClaw`，再次点击才会真正关闭。`重新检测` 只重新读取状态，不负责启动或停止。Telegram 卡片只显示通道是否已连接；顶部状态框内部会在冷启动时显示启动进度条，标出 gateway、Telegram、模型和 sidecar 预热等阶段，进度到 100% 后自动消失。
-
 这是我整理给自己和其他 OpenClaw 用户的一套 Windows/WSL 使用笔记和 Codex skill。
 
 它主要解决一类很烦的问题：OpenClaw 本身能跑，但一接上 Telegram、长期挂后台、电脑重启、WSL 休眠、断网恢复、代理切换、模型认证之后，就开始变得不稳定。很多时候表面现象只是“机器人不回消息”，真正的问题却藏在 gateway、systemd、WSL、token、模型或网络恢复里面。
@@ -130,7 +128,9 @@ openclaw-telegram-wsl-setup/
 openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/
 ```
 
-它是本机的主入口，不替代 OpenClaw 官方浏览器 Control UI。打开后会先尝试唤醒 WSL、启动 `openclaw-gateway.service`，然后显示：
+它是本机的主入口，不替代 OpenClaw 官方浏览器 Control UI。打开 `OpenClaw Control` 只会显示本机状态，不会自动启动或关闭 OpenClaw。需要运行时点击 `开启 OpenClaw`；运行中按钮会变成 `关闭 OpenClaw`，再次点击才会真正关闭。
+
+面板主要显示：
 
 - gateway 和 Telegram 是否可用。
 - 后台是否存在 `queued/running` task、活跃 TaskFlow，或正在持续产出的本地 daemon/工作区产物心跳。
@@ -139,9 +139,11 @@ openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/
 - 最近会话和 Telegram/error 日志提醒。
 - 系统托盘常驻，最小化或关闭窗口时隐藏到托盘。
 
+Telegram 卡片只显示通道是否已连接。OpenClaw 冷启动时，顶部状态框内部会临时显示启动进度条，标出 gateway、Telegram、模型和 sidecar 预热等阶段，进度到 100% 后自动消失。启动未完成时，面板只做轻量探测，先看 gateway 和 Telegram；等就绪后再加载任务、日志、Token、成本、会话和本地产物，避免控制中心反过来拖慢 OpenClaw 启动。
+
 控制中心里的 `打开 Control` 按钮会调用本地 `Start-OpenClaw.ps1`。这个脚本只在本机临时解析 OpenClaw 网关令牌，并生成带 `#token=...` 的浏览器 Control URL；令牌不写进仓库、不打印到聊天、不提交到日志。这样用户不需要每次手动粘贴网关 token。脚本打开 URL 后会尽量把浏览器窗口恢复并拉到前台，让用户能看见这次点击确实生效。
 
-控制中心会自动更新显示内容。界面上的 `重新检测` 按钮不是普通刷新按钮，而是手动触发一次主动检测：唤醒 WSL、尝试启动 gateway，然后重新读取当前状态。它不修改配置、不重置任务、不碰 token。
+控制中心会自动更新显示内容。界面上的 `重新检测` 按钮不是普通刷新按钮，而是手动触发一次主动检测：唤醒 WSL、轻量尝试启动 gateway，然后重新读取当前状态。它不修改配置、不重置任务、不碰 token；自动定时刷新仍然只读状态，不会偷偷启动或关闭 OpenClaw。
 
 `Clash 安全模式` 只针对一个特定网络场景：用户为了让 OpenClaw、Codex 或其他国外大模型稳定走代理，开启了 Clash Verge 的 TUN 或全局式路由，但同时发现微信、腾讯服务或国内网页不能正常访问。开启后，控制中心会通过 Clash Verge Rev 暴露的本地 Mihomo 管道把核心维持在规则模式，让 OpenClaw/Codex 命中 `GLOBAL` 代理组，国内流量继续按规则直连。换节点时只需要在 Clash Verge 的 `GLOBAL` 组里选择节点；这个功能不绑定某个国家或具体节点。如果没有开全局/TUN，或者国内应用本来就正常，通常不用开启这个选项。
 

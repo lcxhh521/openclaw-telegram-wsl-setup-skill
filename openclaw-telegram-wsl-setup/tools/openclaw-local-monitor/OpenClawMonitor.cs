@@ -598,7 +598,7 @@ namespace OpenClawLocalMonitor
             };
             refreshButton.FlatAppearance.BorderSize = 0;
             refreshButton.Click += async (s, e) => await RefreshAsync(true);
-            AddBoundedHoverTip(refreshButton, "唤醒 WSL 并重查网关状态，不改配置。");
+            AddBoundedHoverTip(refreshButton, "唤醒 WSL，轻量启动 gateway 并重查状态；不改配置、不重置任务。");
             Controls.Add(refreshButton);
 
             var hero = new RoundedPanel
@@ -917,7 +917,7 @@ namespace OpenClawLocalMonitor
             refreshButton.Enabled = false;
             try
             {
-                var snapshot = await Task.Run(() => BuildSnapshot());
+                var snapshot = await Task.Run(() => BuildSnapshot(manualRecovery));
                 Render(snapshot);
             }
             catch (Exception ex)
@@ -1145,8 +1145,11 @@ namespace OpenClawLocalMonitor
             }
         }
 
-        Snapshot BuildSnapshot()
+        Snapshot BuildSnapshot(bool manualRecovery)
         {
+            if (manualRecovery)
+                EnsureGatewayForManualRecheck();
+
             var probeTask = Task.Run(() => RunOpenClawJson(new[] { "gateway", "probe", "--json", "--timeout", "30000" }, 45000));
             var channelStatusTask = Task.Run(() => RunOpenClawJson(new[] { "channels", "status", "--json", "--timeout", "30000" }, 45000));
             Task.WaitAll(probeTask, channelStatusTask);
@@ -1224,6 +1227,14 @@ namespace OpenClawLocalMonitor
             if (!string.IsNullOrWhiteSpace(startupNote) && snapshot.GatewayOk)
                 snapshot.StatusLine = startupNote + " | " + snapshot.StatusLine;
             return snapshot;
+        }
+
+        void EnsureGatewayForManualRecheck()
+        {
+            var script =
+                "systemctl --user start openclaw-gateway.service >/dev/null 2>&1 || true\n" +
+                "pgrep -af 'openclaw-manual-keepalive' >/dev/null 2>&1 || (nohup bash -lc 'exec -a openclaw-manual-keepalive sleep infinity' >/dev/null 2>&1 &)\n";
+            RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", script }, 12000);
         }
 
         bool ShouldUseStartupLightProbe(Snapshot snapshot)
