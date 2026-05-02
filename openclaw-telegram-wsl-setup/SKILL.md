@@ -1,6 +1,6 @@
 ---
 name: openclaw-telegram-wsl-setup
-description: "A safe, transparent, simple OpenClaw guide and WSL toolkit for Windows. Use when the user wants to install, run, repair, monitor, or understand OpenClaw on Windows through WSL2; needs gateway readiness checks, keepalive/autostart, local OpenClaw Monitor panel installation, long-offline network recovery, stale socket or polling recovery after internet loss, Telegram bot setup/repair, safe token entry, proxy-aware connectivity, pairing approval, channel startup verification, or diagnosis of messages that are not received, not answered, delayed, or only work while WSL is awake."
+description: "A safe, transparent, simple OpenClaw guide and WSL toolkit for Windows. Use when the user wants to install, run, repair, monitor, or understand OpenClaw on Windows through WSL2; needs gateway readiness checks, keepalive/autostart, local OpenClaw Monitor panel installation, IMA OpenAPI skill setup for Tencent ima knowledge bases, long-offline network recovery, stale socket or polling recovery after internet loss, Telegram bot setup/repair, safe token entry, proxy-aware connectivity, pairing approval, channel startup verification, or diagnosis of messages that are not received, not answered, delayed, or only work while WSL is awake."
 ---
 
 # OpenClaw 养虾指南（WSL Toolkit）
@@ -1026,6 +1026,84 @@ If self-check passes but transcription fails:
 - Check account quota or billing status.
 - Check whether the audio file is too large; use smaller clips for ordinary OpenClaw workflows.
 - Do not keep retrying large private audio files without user approval.
+
+## IMA OpenAPI Knowledge Base Setup
+
+Use this section when the user wants OpenClaw to call Tencent ima knowledge bases, notes, or "IMA Skills" through natural language. Prefer the official IMA OpenAPI skill path over desktop automation skills unless the user explicitly wants to control the ima.copilot desktop app.
+
+Principles:
+
+- Never ask the user to paste IMA Client ID or API Key into chat.
+- Use a local terminal prompt or provider UI for credentials.
+- IMA OpenAPI requires both Client ID and API Key from `https://ima.qq.com/agent-interface`.
+- Treat the skill as passive: it should not add a long-running process or call IMA during gateway startup. It should only run when a natural-language request mentions knowledge bases, notes, uploads, URL import, or IMA search.
+- If credentials were exposed in chat, screenshots, shell history, or logs, recommend rotating them in IMA, even if the user says it is not urgent.
+
+Install and inspect:
+
+```powershell
+wsl -d Ubuntu -- bash -lc 'openclaw skills search ima'
+wsl -d Ubuntu -- bash -lc 'openclaw skills install ima-skills'
+wsl -d Ubuntu -- bash -lc 'sed -n "1,220p" ~/.openclaw/workspace/skills/ima-skills/SKILL.md'
+wsl -d Ubuntu -- bash -lc 'sed -n "1,220p" ~/.openclaw/workspace/skills/ima-skills/knowledge-base/SKILL.md'
+```
+
+If network fetch fails inside the sandbox, rerun the install with approval for network access. The installed skill name may appear as `ima-skill` even when the ClawHub slug is `ima-skills`.
+
+Credential storage:
+
+```bash
+mkdir -p "$HOME/.config/ima" "$HOME/.openclaw/secrets"
+chmod 700 "$HOME/.config/ima" "$HOME/.openclaw/secrets"
+read -rp "IMA OpenAPI Client ID: " IMA_CLIENT_ID
+read -rsp "IMA OpenAPI API Key: " IMA_API_KEY
+printf '\n'
+umask 077
+printf '%s\n' "$IMA_CLIENT_ID" > "$HOME/.config/ima/client_id"
+printf '%s\n' "$IMA_API_KEY" > "$HOME/.config/ima/api_key"
+{
+  printf 'IMA_OPENAPI_CLIENTID=%s\n' "$IMA_CLIENT_ID"
+  printf 'IMA_OPENAPI_APIKEY=%s\n' "$IMA_API_KEY"
+  printf 'IMA_CLIENT_ID=%s\n' "$IMA_CLIENT_ID"
+  printf 'IMA_API_KEY=%s\n' "$IMA_API_KEY"
+} > "$HOME/.openclaw/secrets/ima.env"
+chmod 600 "$HOME/.config/ima/client_id" "$HOME/.config/ima/api_key" "$HOME/.openclaw/secrets/ima.env"
+unset IMA_CLIENT_ID IMA_API_KEY
+```
+
+When driving this from Windows, prefer opening a local PowerShell prompt that uses `Read-Host -AsSecureString` for the API Key and writes to `\\wsl.localhost\Ubuntu\home\<user>\.config\ima\...`. Do not ask the user to type credentials at a normal shell prompt.
+
+Load the credentials into the gateway service:
+
+```bash
+mkdir -p "$HOME/.config/systemd/user/openclaw-gateway.service.d"
+cat > "$HOME/.config/systemd/user/openclaw-gateway.service.d/ima.conf" <<'EOF'
+[Service]
+EnvironmentFile=%h/.openclaw/secrets/ima.env
+EOF
+systemctl --user daemon-reload
+systemctl --user restart openclaw-gateway.service
+```
+
+Validation:
+
+```bash
+cd "$HOME/.openclaw/workspace/skills/ima-skills"
+node ima_api.cjs openapi/wiki/v1/search_knowledge_base '{"query":"","cursor":"","limit":20}'
+systemctl --user is-active openclaw-gateway.service
+openclaw gateway probe --timeout 15000
+```
+
+Success looks like `{"code":0,"msg":"success",...}` with an `info_list` of knowledge bases. Report the knowledge-base names only; never print or inspect credential file contents. If `openclaw skills list` still says `needs setup` while the API call succeeds, explain that the runtime is healthy and the checker may only inspect environment metadata.
+
+Natural-language smoke tests for the user:
+
+- "帮我看看 IMA 里有哪些知识库"
+- "搜索 IMA 里有没有关于 OpenClaw 的内容"
+- "把这个微信文章链接加入轻舟的知识库"
+- "上传这个 PDF 到指定 IMA 知识库"
+
+Startup-speed expectation: installing `ima-skills` and adding `ima.env` should not materially slow gateway startup. The skill is passive and has no resident process; only an environment file is read during service startup. If startup becomes slow, diagnose gateway/plugins/sidecars from logs before blaming IMA.
 
 ## Telegram Setup And Pairing
 
