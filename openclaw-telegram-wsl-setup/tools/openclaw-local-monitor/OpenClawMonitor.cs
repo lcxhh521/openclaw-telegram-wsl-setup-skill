@@ -140,6 +140,7 @@ namespace OpenClawLocalMonitor
         public DateTime GeneratedAt = DateTime.Now;
         public string State = "Idle";
         public bool GatewayOk;
+        public bool OpenClawServiceActive;
         public bool GatewaySoftFailure;
         public bool TelegramOk;
         public string TelegramCardState = "warn";
@@ -250,6 +251,7 @@ namespace OpenClawLocalMonitor
         bool trayNoticeShown;
         bool togglingOpenClaw;
         bool lastGatewayOk;
+        bool lastOpenClawServiceActive;
         bool wasMinimized;
         bool smoothRestorePending;
         string startupNote = "";
@@ -913,7 +915,7 @@ namespace OpenClawLocalMonitor
             if (manualRecovery)
                 updated.Text = "重新检测中...";
             else if (togglingOpenClaw)
-                updated.Text = lastGatewayOk ? "关闭中..." : "启动中...";
+                updated.Text = lastOpenClawServiceActive ? "关闭中..." : "启动中...";
             refreshButton.Enabled = false;
             try
             {
@@ -936,7 +938,9 @@ namespace OpenClawLocalMonitor
         async Task ToggleOpenClawAsync()
         {
             if (togglingOpenClaw) return;
-            var shouldStop = lastGatewayOk;
+            var serviceActive = await Task.Run(() => GatewayServiceLooksActive());
+            var shouldStop = serviceActive || lastOpenClawServiceActive;
+            lastOpenClawServiceActive = shouldStop;
             togglingOpenClaw = true;
             startupNote = shouldStop ? "正在关闭 OpenClaw..." : "正在启动 OpenClaw...";
             updated.Text = startupNote;
@@ -944,6 +948,7 @@ namespace OpenClawLocalMonitor
             try
             {
                 var result = await Task.Run(() => shouldStop ? StopOpenClawGateway() : StartOpenClawGateway());
+                lastOpenClawServiceActive = result.Ok ? !shouldStop : GatewayServiceLooksActive();
                 startupNote = result.Ok
                     ? (shouldStop ? "OpenClaw 已关闭。" : "OpenClaw 已启动，正在检查 Telegram。")
                     : (shouldStop ? "已尝试关闭 OpenClaw；如果仍显示运行，请稍后重新检测。" : "已尝试启动 OpenClaw；如果仍异常，请查看状态卡片。");
@@ -961,14 +966,14 @@ namespace OpenClawLocalMonitor
             if (openClawPowerButton == null) return;
 
             var text = togglingOpenClaw
-                ? (lastGatewayOk ? "关闭中..." : "启动中...")
-                : (lastGatewayOk ? "关闭 OpenClaw" : "开启 OpenClaw");
+                ? (lastOpenClawServiceActive ? "关闭中..." : "启动中...")
+                : (lastOpenClawServiceActive ? "关闭 OpenClaw" : "开启 OpenClaw");
 
             openClawPowerButton.Text = text;
             openClawPowerButton.Enabled = !togglingOpenClaw;
             openClawPowerButton.BackColor = togglingOpenClaw
                 ? Color.FromArgb(148, 163, 184)
-                : lastGatewayOk ? Color.FromArgb(220, 38, 38) : Color.FromArgb(22, 163, 74);
+                : lastOpenClawServiceActive ? Color.FromArgb(220, 38, 38) : Color.FromArgb(22, 163, 74);
 
             if (openClawPowerTrayItem != null)
             {
@@ -1156,28 +1161,30 @@ namespace OpenClawLocalMonitor
 
             var probe = probeTask.Result;
             var channelStatus = channelStatusTask.Result;
+            var openClawServiceActive = GatewayServiceLooksActive();
 
             var snapshot = new Snapshot();
+            snapshot.OpenClawServiceActive = probe.Item1 || channelStatus.Item1 || openClawServiceActive;
             SetStartupProgress(snapshot, 0, "等待开启", "OpenClaw 未启动或正在等待检测。");
             if (!probe.Item1)
             {
                 gatewayProbeFailures++;
                 snapshot.Error = probe.Item3;
-                var serviceLooksAlive = channelStatus.Item1 || GatewayServiceLooksActive();
+                var serviceLooksAlive = channelStatus.Item1 || openClawServiceActive;
                 if (serviceLooksAlive && gatewayProbeFailures < 3)
                 {
                     snapshot.State = "Degraded";
-                    snapshot.GatewayText = "探针不稳定";
+                    snapshot.GatewayText = "启动中";
                     snapshot.GatewaySoftFailure = true;
-                    SetStartupProgress(snapshot, 35, "网关启动中", "OpenClaw 服务有响应，但本轮 gateway 探针超时。");
-                    snapshot.StatusLine = "本轮 gateway 探针超时，但 OpenClaw 服务仍有响应；面板会继续自动重试。";
+                    SetStartupProgress(snapshot, 35, "网关启动中", "OpenClaw 服务有响应，正在等待 gateway 稳定。");
+                    snapshot.StatusLine = "OpenClaw 服务仍有响应；面板会继续等待启动链路稳定。";
                 }
                 else
                 {
                     snapshot.State = "Problem";
-                    snapshot.GatewayText = "探针失败";
-                    SetStartupProgress(snapshot, 0, "网关未响应", "gateway 探针失败，尚未进入可用启动链路。");
-                    snapshot.StatusLine = string.IsNullOrWhiteSpace(probe.Item3) ? "gateway 探针连续失败。" : probe.Item3;
+                    snapshot.GatewayText = "未连接";
+                    SetStartupProgress(snapshot, 0, "网关未响应", "OpenClaw 尚未进入可用启动链路。");
+                    snapshot.StatusLine = string.IsNullOrWhiteSpace(probe.Item3) ? "OpenClaw 启动链路尚未连通。" : probe.Item3;
                 }
             }
             else
@@ -1929,6 +1936,7 @@ namespace OpenClawLocalMonitor
             gateway.Value.Text = s.GatewayText;
             SetCard(gateway, s.GatewayOk ? "good" : s.GatewaySoftFailure ? "warn" : "bad");
             lastGatewayOk = s.GatewayOk;
+            lastOpenClawServiceActive = s.OpenClawServiceActive;
             UpdateOpenClawPowerUi();
             telegram.Value.Text = s.TelegramText;
             SetCard(telegram, s.TelegramCardState);
@@ -1957,7 +1965,7 @@ namespace OpenClawLocalMonitor
 
             sessionList.Items.Clear();
             foreach (var row in s.Sessions) sessionList.Items.Add(row);
-            if (s.Sessions.Count == 0) sessionList.Items.Add("探针没有返回会话数据。");
+            if (s.Sessions.Count == 0) sessionList.Items.Add("暂未读取到会话数据。");
 
             logList.Items.Clear();
             foreach (var row in s.Logs) logList.Items.Add(row);
@@ -1968,7 +1976,7 @@ namespace OpenClawLocalMonitor
         string HeroTitle(Snapshot s)
         {
             if (s.State == "Problem") return "需要处理";
-            if (s.State == "Degraded") return "探针不稳定";
+            if (s.State == "Degraded") return "OpenClaw 启动中";
             if (s.State == "Working") return "OpenClaw 正在工作";
             if (s.State == "Ready") return "OpenClaw 已就绪";
             return "OpenClaw 当前安静";
@@ -1983,7 +1991,7 @@ namespace OpenClawLocalMonitor
                 if (s.AuditErrors > 0) return "任务审计有错误。请查看提醒和日志。";
                 return "有项目需要处理。";
             }
-            if (s.State == "Degraded") return "OpenClaw 服务仍有响应，但本轮 gateway 探针超时。面板会自动重试，连续失败才标红。";
+            if (s.State == "Degraded") return "OpenClaw 服务仍有响应，正在等待 gateway 和 Telegram 启动链路稳定。";
             if (s.State == "Working") return "检测到 OpenClaw 注册任务、活跃 TaskFlow、仍在运行的本地 daemon，或连续刷新之间的新产物写入。可以在下方表格看进展。";
             if (s.State == "Ready") return "网关和 Telegram 已连接；后台没有 queued/running 任务、活跃 TaskFlow 或仍在运行的本地 daemon。";
             return "后台没有 queued/running 任务、活跃 TaskFlow 或仍在运行的本地 daemon。";
