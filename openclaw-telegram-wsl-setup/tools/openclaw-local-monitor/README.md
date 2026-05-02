@@ -52,6 +52,8 @@ The panel updates its display automatically. The `重新检测` button manually 
 
 Hovering over the button should show this in short form inside the panel itself. The hint should stay within the app window rather than using a native tooltip that can spill outside the interface.
 
+During OpenClaw cold startup, the panel uses a lightweight startup probe first: gateway probe plus Telegram channel status. It skips heavier task, audit, log, token, cost, session, and workspace-artifact reads until the startup progress reaches ready. This keeps the control center from adding pressure while OpenClaw is still bringing up channels and sidecars.
+
 When restoring from the system tray or the Windows taskbar, the window should force layout and repaint before becoming visible. Avoid `WS_EX_COMPOSITED` full-window compositing for this panel because it can make child controls briefly appear as black or unpainted rectangles during startup or restore.
 
 ## Clash Safe Mode

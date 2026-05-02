@@ -1148,23 +1148,11 @@ namespace OpenClawLocalMonitor
         Snapshot BuildSnapshot()
         {
             var probeTask = Task.Run(() => RunOpenClawJson(new[] { "gateway", "probe", "--json", "--timeout", "30000" }, 45000));
-            var statusTask = Task.Run(() => RunOpenClawJson(new[] { "status", "--json" }, 35000));
             var channelStatusTask = Task.Run(() => RunOpenClawJson(new[] { "channels", "status", "--json", "--timeout", "30000" }, 45000));
-            var tasksTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "list", "--json" }, 35000));
-            var flowsTask = Task.Run(() => RunOpenClawText(new[] { "tasks", "flow", "list" }, 35000));
-            var auditTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "audit", "--json" }, 35000));
-            var logsTask = Task.Run(() => RunLogs());
-            var workspaceTask = Task.Run(() => RunWorkspaceActivity());
-            Task.WaitAll(probeTask, statusTask, channelStatusTask, tasksTask, flowsTask, auditTask, logsTask, workspaceTask);
+            Task.WaitAll(probeTask, channelStatusTask);
 
             var probe = probeTask.Result;
-            var status = statusTask.Result;
             var channelStatus = channelStatusTask.Result;
-            var taskData = tasksTask.Result;
-            var flowData = flowsTask.Result;
-            var auditData = auditTask.Result;
-            var logs = logsTask.Result;
-            var workspaceActivity = workspaceTask.Result;
 
             var snapshot = new Snapshot();
             SetStartupProgress(snapshot, 0, "等待开启", "OpenClaw 未启动或正在等待检测。");
@@ -1172,7 +1160,7 @@ namespace OpenClawLocalMonitor
             {
                 gatewayProbeFailures++;
                 snapshot.Error = probe.Item3;
-                var serviceLooksAlive = StatusShowsGatewayServiceRunning(status.Item2) || status.Item1 || taskData.Item1 || auditData.Item1;
+                var serviceLooksAlive = channelStatus.Item1 || GatewayServiceLooksActive();
                 if (serviceLooksAlive && gatewayProbeFailures < 3)
                 {
                     snapshot.State = "Degraded";
@@ -1195,6 +1183,30 @@ namespace OpenClawLocalMonitor
                 FillFromProbe(snapshot, probe.Item2);
             }
             FillChannelStatus(snapshot, channelStatus.Item2);
+
+            if (ShouldUseStartupLightProbe(snapshot))
+            {
+                FillStartupLightPlaceholders(snapshot);
+                if (!string.IsNullOrWhiteSpace(startupNote) && snapshot.GatewayOk)
+                    snapshot.StatusLine = startupNote + " | " + snapshot.StatusLine;
+                return snapshot;
+            }
+
+            var statusTask = Task.Run(() => RunOpenClawJson(new[] { "status", "--json" }, 35000));
+            var tasksTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "list", "--json" }, 35000));
+            var flowsTask = Task.Run(() => RunOpenClawText(new[] { "tasks", "flow", "list" }, 35000));
+            var auditTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "audit", "--json" }, 35000));
+            var logsTask = Task.Run(() => RunLogs());
+            var workspaceTask = Task.Run(() => RunWorkspaceActivity());
+            Task.WaitAll(statusTask, tasksTask, flowsTask, auditTask, logsTask, workspaceTask);
+
+            var status = statusTask.Result;
+            var taskData = tasksTask.Result;
+            var flowData = flowsTask.Result;
+            var auditData = auditTask.Result;
+            var logs = logsTask.Result;
+            var workspaceActivity = workspaceTask.Result;
+
             FillTokenUsage(snapshot, status.Item2);
             FillCostUsage(snapshot);
             FillTasks(snapshot, taskData.Item2);
@@ -1212,6 +1224,32 @@ namespace OpenClawLocalMonitor
             if (!string.IsNullOrWhiteSpace(startupNote) && snapshot.GatewayOk)
                 snapshot.StatusLine = startupNote + " | " + snapshot.StatusLine;
             return snapshot;
+        }
+
+        bool ShouldUseStartupLightProbe(Snapshot snapshot)
+        {
+            if (!snapshot.GatewayOk) return true;
+            if (!snapshot.TelegramOk) return true;
+            return snapshot.StartupProgress > 0 && snapshot.StartupProgress < 100;
+        }
+
+        void FillStartupLightPlaceholders(Snapshot snapshot)
+        {
+            if (snapshot.GatewayOk)
+            {
+                snapshot.Sessions.Add("启动阶段暂不读取会话，避免拖慢 OpenClaw。");
+                snapshot.Logs.Add("启动阶段只检查网关和 Telegram；就绪后再加载日志、任务、Token 和成本。");
+            }
+            else
+            {
+                snapshot.Logs.Add("OpenClaw 尚未完成网关探测。");
+            }
+        }
+
+        bool GatewayServiceLooksActive()
+        {
+            var result = RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", "systemctl --user is-active openclaw-gateway.service 2>/dev/null" }, 8000);
+            return result.Ok && result.Stdout.Trim().Equals("active", StringComparison.OrdinalIgnoreCase);
         }
 
         bool StatusShowsGatewayServiceRunning(object statusObj)
