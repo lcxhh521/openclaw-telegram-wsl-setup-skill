@@ -142,6 +142,10 @@ namespace OpenClawLocalMonitor
         public bool GatewayOk;
         public bool GatewaySoftFailure;
         public bool TelegramOk;
+        public string TelegramCardState = "warn";
+        public long TelegramLastStartAt = -1;
+        public long TelegramLastInboundAt = -1;
+        public long TelegramLastOutboundAt = -1;
         public int RunningTasks;
         public int AuditWarnings;
         public int AuditErrors;
@@ -1111,15 +1115,17 @@ namespace OpenClawLocalMonitor
         {
             var probeTask = Task.Run(() => RunOpenClawJson(new[] { "gateway", "probe", "--json", "--timeout", "30000" }, 45000));
             var statusTask = Task.Run(() => RunOpenClawJson(new[] { "status", "--json" }, 35000));
+            var channelStatusTask = Task.Run(() => RunOpenClawJson(new[] { "channels", "status", "--json", "--timeout", "30000" }, 45000));
             var tasksTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "list", "--json" }, 35000));
             var flowsTask = Task.Run(() => RunOpenClawText(new[] { "tasks", "flow", "list" }, 35000));
             var auditTask = Task.Run(() => RunOpenClawJson(new[] { "tasks", "audit", "--json" }, 35000));
             var logsTask = Task.Run(() => RunLogs());
             var workspaceTask = Task.Run(() => RunWorkspaceActivity());
-            Task.WaitAll(probeTask, statusTask, tasksTask, flowsTask, auditTask, logsTask, workspaceTask);
+            Task.WaitAll(probeTask, statusTask, channelStatusTask, tasksTask, flowsTask, auditTask, logsTask, workspaceTask);
 
             var probe = probeTask.Result;
             var status = statusTask.Result;
+            var channelStatus = channelStatusTask.Result;
             var taskData = tasksTask.Result;
             var flowData = flowsTask.Result;
             var auditData = auditTask.Result;
@@ -1151,6 +1157,7 @@ namespace OpenClawLocalMonitor
                 gatewayProbeFailures = 0;
                 FillFromProbe(snapshot, probe.Item2);
             }
+            FillChannelStatus(snapshot, channelStatus.Item2);
             FillTokenUsage(snapshot, status.Item2);
             FillCostUsage(snapshot);
             FillTasks(snapshot, taskData.Item2);
@@ -1205,6 +1212,7 @@ namespace OpenClawLocalMonitor
             var tgConnected = ToBool(Get(telegramChannel, "connected"));
             s.TelegramOk = tgConfigured && tgRunning && tgConnected;
             s.TelegramText = !tgConfigured ? "未配置" : (s.TelegramOk ? "已连接" : "需检查");
+            s.TelegramCardState = s.TelegramOk ? "good" : "bad";
 
             var summary = AsDict(Get(targetDict, "summary"));
             var summaryTasks = AsDict(Get(summary, "tasks"));
@@ -1233,6 +1241,99 @@ namespace OpenClawLocalMonitor
             s.StatusLine = url + " | Telegram " + s.TelegramText;
             if (!s.GatewayOk || (tgConfigured && !s.TelegramOk)) s.State = "Problem";
             if (s.GatewayOk && s.TelegramOk && s.State == "Idle") s.State = "Ready";
+        }
+
+        void FillChannelStatus(Snapshot s, object channelStatusObj)
+        {
+            var data = AsDict(channelStatusObj);
+            if (data.Count == 0) return;
+
+            var accountsByChannel = AsDict(Get(data, "channelAccounts"));
+            var telegramAccounts = AsList(Get(accountsByChannel, "telegram"));
+            var account = telegramAccounts.Count > 0 ? AsDict(telegramAccounts[0]) : new Dictionary<string, object>();
+            var channels = AsDict(Get(data, "channels"));
+            var telegram = AsDict(Get(channels, "telegram"));
+
+            var source = account.Count > 0 ? account : telegram;
+            if (source.Count == 0) return;
+
+            var configured = ToBool(Get(source, "configured"));
+            var running = ToBool(Get(source, "running"));
+            var connected = ToBool(Get(source, "connected"));
+            var lastError = Convert.ToString(Get(source, "lastError") ?? "");
+            s.TelegramLastStartAt = ToLong(Get(source, "lastStartAt"));
+            s.TelegramLastInboundAt = ToLong(Get(source, "lastInboundAt"));
+            s.TelegramLastOutboundAt = ToLong(Get(source, "lastOutboundAt"));
+
+            var startAgeMs = MillisecondsSince(s.TelegramLastStartAt);
+            var inAgeMs = MillisecondsSince(s.TelegramLastInboundAt);
+            var outAgeMs = MillisecondsSince(s.TelegramLastOutboundAt);
+            var startupWindow = startAgeMs <= 120000;
+
+            if (!configured)
+            {
+                s.TelegramOk = false;
+                s.TelegramText = "未配置";
+                s.TelegramCardState = "bad";
+                return;
+            }
+
+            if (!running)
+            {
+                s.TelegramOk = false;
+                s.TelegramText = startupWindow ? "启动中 " + AgeSince(s.TelegramLastStartAt) : "未运行";
+                s.TelegramCardState = startupWindow ? "warn" : "bad";
+                if (startupWindow && s.State == "Problem") s.State = "Degraded";
+                return;
+            }
+
+            if (!connected)
+            {
+                s.TelegramOk = false;
+                s.TelegramText = startupWindow ? "连接中 " + AgeSince(s.TelegramLastStartAt) : "未连接";
+                s.TelegramCardState = startupWindow ? "warn" : "bad";
+                if (startupWindow && s.State == "Problem") s.State = "Degraded";
+                return;
+            }
+
+            s.TelegramOk = true;
+            if (!string.IsNullOrWhiteSpace(lastError))
+            {
+                s.TelegramText = "有错误";
+                s.TelegramCardState = "warn";
+                return;
+            }
+
+            var hasInboundWaiting = s.TelegramLastInboundAt > 0
+                && (s.TelegramLastOutboundAt <= 0 || s.TelegramLastOutboundAt < s.TelegramLastInboundAt);
+            if (hasInboundWaiting)
+            {
+                s.TelegramText = inAgeMs <= 180000 ? "收到未回 " + AgeSince(s.TelegramLastInboundAt) : "久未回复 " + AgeSince(s.TelegramLastInboundAt);
+                s.TelegramCardState = inAgeMs <= 180000 ? "work" : "warn";
+                if (s.State != "Problem" && s.State != "Degraded") s.State = inAgeMs <= 180000 ? "Working" : "Degraded";
+                s.StatusLine = "Telegram 已收到消息但尚未回复：收到 " + AgeSince(s.TelegramLastInboundAt)
+                    + "，上次回复 " + AgeSince(s.TelegramLastOutboundAt) + "。";
+                return;
+            }
+
+            if (outAgeMs != long.MaxValue)
+            {
+                s.TelegramText = "已回复 " + AgeSince(s.TelegramLastOutboundAt);
+                s.TelegramCardState = "good";
+                return;
+            }
+
+            if (startupWindow)
+            {
+                s.TelegramText = "已连接 预热中";
+                s.TelegramCardState = "warn";
+                if (s.State == "Problem") s.State = "Degraded";
+                s.StatusLine = "Telegram 已连接，OpenClaw 刚启动 " + AgeSince(s.TelegramLastStartAt) + "，模型和 sidecar 可能仍在预热。";
+                return;
+            }
+
+            s.TelegramText = "已连接";
+            s.TelegramCardState = "good";
         }
 
         void FillTasks(Snapshot s, object tasksObj)
@@ -1487,7 +1588,7 @@ namespace OpenClawLocalMonitor
             if (!result.Ok) return Tuple.Create(false, (object)null, result.Stderr + result.Error);
             try
             {
-                return Tuple.Create(true, json.DeserializeObject(result.Stdout), "");
+                return Tuple.Create(true, json.DeserializeObject(ExtractJsonObject(result.Stdout)), "");
             }
             catch (Exception ex)
             {
@@ -1500,6 +1601,43 @@ namespace OpenClawLocalMonitor
             var all = new List<string> { "-d", WslDistro, "--", "bash", "-lc", BashCommand(args) };
             var result = RunProcess("wsl.exe", all.ToArray(), timeoutMs);
             return Tuple.Create(result.Ok, result.Stdout, result.Stderr + result.Error);
+        }
+
+        static string ExtractJsonObject(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "{}";
+            var start = text.IndexOf('{');
+            if (start < 0) return text;
+            var depth = 0;
+            var inString = false;
+            var escape = false;
+            for (var i = start; i < text.Length; i++)
+            {
+                var ch = text[i];
+                if (escape)
+                {
+                    escape = false;
+                    continue;
+                }
+                if (ch == '\\' && inString)
+                {
+                    escape = true;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    inString = !inString;
+                    continue;
+                }
+                if (inString) continue;
+                if (ch == '{') depth++;
+                else if (ch == '}')
+                {
+                    depth--;
+                    if (depth == 0) return text.Substring(start, i - start + 1);
+                }
+            }
+            return text.Substring(start);
         }
 
         List<Dictionary<string, object>> RunLogs()
@@ -1714,7 +1852,7 @@ namespace OpenClawLocalMonitor
             lastGatewayOk = s.GatewayOk;
             UpdateOpenClawPowerUi();
             telegram.Value.Text = s.TelegramText;
-            SetCard(telegram, s.TelegramOk ? "good" : "bad");
+            SetCard(telegram, s.TelegramCardState);
             var registeredWork = Math.Max(s.RunningTasks, s.FlowActive);
             var backgroundTotal = registeredWork + s.FlowBlocked + s.FlowCancelRequested + s.LocalWorkItems;
             tasks.Value.Text = backgroundTotal.ToString();
