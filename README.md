@@ -53,7 +53,7 @@ Windows
 
 ## 它能做什么
 
-这套东西主要分成四块。
+这套东西主要分成五块。
 
 第一块是安装和修复。它会优先按 Windows + WSL2 + Ubuntu 的路线处理 OpenClaw，先把 gateway、systemd user service、模型回复和权限范围确认好，再接 Telegram。
 
@@ -61,7 +61,9 @@ Windows
 
 第三块是本机控制中心。它是一个 Windows 小程序，用来启动/关闭 OpenClaw、查看 gateway 和 Telegram 是否可用、观察后台任务、Token/成本流向、最近日志和本地产物心跳。它也可以待在系统托盘里，不需要每次都开浏览器。
 
-第四块是可选增强。比如 Jina embeddings、Tavily web search、豆包/火山录音文件识别。这些不是基础安装必需项，只有真的需要语义记忆、联网检索或本地音频处理时再加。
+第四块是 IMA 知识库接入。它记录了如何给 OpenClaw 安装官方 `ima-skills`，用 IMA OpenAPI 读取和搜索腾讯 ima 知识库、添加网页/微信文章、上传文件、管理笔记，并通过自然语言触发这些能力。
+
+第五块是可选增强。比如 Jina embeddings、Tavily web search、豆包/火山录音文件识别。这些不是基础安装必需项，只有真的需要语义记忆、联网检索或本地音频处理时再加。
 
 另外，它会特别注意几件容易出事故的事：不要把 token 发到聊天里，不要把 key 写进仓库，不要随便重置配置，不要把“机器人没回”直接等同于“Telegram token 坏了”。
 
@@ -145,6 +147,50 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-OpenClawMonito
 安装脚本会把源码复制到 `%LOCALAPPDATA%\OpenClawMonitor`，在本机编译 `OpenClawMonitor.exe`，创建 `OpenClaw Control` 桌面、开始菜单和 Startup-folder 快捷方式，清理旧的 `OpenClaw Monitor` / `OpenClaw 启动` 等旧入口，并启动控制中心。仓库不提交任何真实 token、API key、auth profile 或本机日志。
 
 图标是透明背景的可爱红色 OpenClaw 小助手风格，避免使用带黑色背景的截图作为桌面或托盘图标。
+
+## IMA 知识库接入
+
+OpenClaw 可以通过官方 `ima-skills` 调用腾讯 ima 知识库。这个仓库的 skill 已经加入一套 IMA OpenAPI 配置流程，适合这些场景：
+
+- 查看自己加入或创建的 IMA 知识库。
+- 在指定知识库里搜索内容。
+- 把网页或微信文章链接加入知识库。
+- 上传 PDF、Word、PPT、表格等受支持文件到知识库。
+- 创建、搜索、读取或追加 IMA 笔记。
+
+推荐安装路径是：
+
+```powershell
+wsl -d Ubuntu -- bash -lc 'openclaw skills search ima'
+wsl -d Ubuntu -- bash -lc 'openclaw skills install ima-skills'
+```
+
+IMA OpenAPI 需要在 `https://ima.qq.com/agent-interface` 获取 **Client ID** 和 **API Key**。不要把它们发到聊天里，也不要提交进仓库；应通过本地终端提示保存到 Ubuntu：
+
+```text
+~/.config/ima/client_id
+~/.config/ima/api_key
+~/.openclaw/secrets/ima.env
+```
+
+然后给 `openclaw-gateway.service` 增加一个 systemd user drop-in，让 gateway 启动时读取 `ima.env`：
+
+```text
+~/.config/systemd/user/openclaw-gateway.service.d/ima.conf
+```
+
+配置成功后，可以用知识库列表接口做自检。成功时会返回 `code=0` 和知识库 `info_list`，只需要展示知识库名称，不要打印凭证文件内容。
+
+自然语言使用示例：
+
+```text
+帮我看看 IMA 里有哪些知识库
+搜索“长安投研”里关于 AI 服务器的内容
+把这个微信文章链接加入“轻舟的知识库”
+上传这个 PDF 到指定 IMA 知识库
+```
+
+`ima-skills` 是被动 skill，不会常驻运行，也不会在 gateway 启动时主动访问 IMA。正常情况下，它只是在启动时多读一个环境变量文件，几乎不应影响 OpenClaw 启动速度；如果启动变慢，应优先排查 gateway、插件、sidecar 或代理日志。
 
 ## 可选 API 增强：Jina / Tavily
 
