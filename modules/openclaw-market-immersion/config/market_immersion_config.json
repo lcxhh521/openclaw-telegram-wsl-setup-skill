@@ -1,17 +1,17 @@
 {
   "version": 1,
   "timezone": "Asia/Shanghai",
-  "workspace_dir": "/home/lcxhh/.openclaw/workspace",
-  "output_dir": "/home/lcxhh/.openclaw/workspace/market-immersion",
-  "venv_python": "/home/lcxhh/.openclaw/workspace/.venv-mxskills/bin/python",
-  "openclaw_bin": "/home/lcxhh/.local/bin/openclaw",
-  "secrets_env": "/home/lcxhh/.openclaw/secrets/mx.env",
+  "workspace_dir": "~/.openclaw/workspace",
+  "output_dir": "~/.openclaw/workspace/market-immersion",
+  "venv_python": "~/.openclaw/workspace/.venv-mxskills/bin/python",
+  "openclaw_bin": "~/.local/bin/openclaw",
+  "secrets_env": "~/.openclaw/secrets/mx.env",
   "notion": {
-    "enabled": true,
-    "secrets_env": "/home/lcxhh/.openclaw/secrets/notion.env",
+    "enabled": false,
+    "secrets_env": "~/.openclaw/secrets/notion.env",
     "token_env": "NOTION_TOKEN",
     "parent_page_id_env": "NOTION_PARENT_PAGE_ID",
-    "parent_page_id": "3548c93dc6b480a5b6ebe997305a30ff",
+    "parent_page_id": "",
     "publish_smoke": false,
     "timeout": 120
   },
@@ -139,9 +139,9 @@
     "enabled_for_smoke": true
   },
   "telegram": {
-    "enabled": true,
+    "enabled": false,
     "channel": "telegram",
-    "target": "7215741815",
+    "target": "",
     "account": "default",
     "send_mode": "document",
     "send_smoke": false,

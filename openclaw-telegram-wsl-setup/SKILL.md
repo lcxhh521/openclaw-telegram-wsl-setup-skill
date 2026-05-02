@@ -934,6 +934,8 @@ Key handling rules:
 
 - Store MX credentials in `~/.openclaw/secrets/mx.env`.
 - Store Notion credentials in `~/.openclaw/secrets/notion.env`.
+- The bundled `config/market_immersion_config.json` must remain portable: use `~/.openclaw/...` paths, leave user-specific Notion page IDs and Telegram targets blank, and keep Notion/Telegram publishing disabled until the user opts in.
+- When the user opts into Notion or Telegram publishing, update that user's installed config under `~/.openclaw/workspace/market-immersion-module/config/market_immersion_config.json`; do not commit their IDs or targets back to the repository.
 - Keep secret files mode `0600`.
 - Never print, log, screenshot, commit, or chat-paste secret values.
 - If a secret is exposed in chat, logs, screenshots, or command history, recommend rotating it.
@@ -1004,6 +1006,8 @@ Use the module's local prompts for secrets when available:
 ```bash
 "$HOME/.openclaw/workspace/market-immersion-module/scripts/set_notion_token.sh"
 ```
+
+After the user opts into Notion, set only the installed local config to `"notion": {"enabled": true, ...}`. After the user opts into Telegram report push, set only the installed local config to `"telegram": {"enabled": true, "target": "<user target>", ...}`. The repository template should keep both disabled and target/page fields blank.
 
 Install timers only after the user opts in:
 

@@ -61,7 +61,7 @@ Windows
 
 第三块是本机控制中心。它是一个 Windows 小程序，用来启动/关闭 OpenClaw、查看 gateway 和 Telegram 是否可用、观察后台任务、Token/成本流向、最近日志和本地产物心跳。它也可以待在系统托盘里，不需要每次都开浏览器。
 
-第四块是市场信息浸泡模块。它是一个可选 `openclaw-job-module`，用于按时间段抓取 7x24 财经快讯流，交给 OpenClaw 做轻整理，并在成功后发布到 Notion，必要时再把日报链接或文件推送到 Telegram。这个模块不是基础安装必需项，只有用户明确要市场日报、信息浸泡或 Notion 闭环时才安装。
+第四块是市场信息浸泡模块。它是一个可选 `openclaw-job-module`，用于按时间段抓取 7x24 财经快讯流，交给 OpenClaw 做轻整理，并生成本地归档；如果用户明确启用，也可以发布到 Notion 或把日报链接/文件推送到 Telegram。这个模块不是基础安装必需项，只有用户明确要市场日报、信息浸泡或 Notion 闭环时才安装。
 
 第五块是 IMA 知识库接入。它记录了如何给 OpenClaw 安装官方 `ima-skills`，用 IMA OpenAPI 读取和搜索腾讯 ima 知识库、添加网页/微信文章、上传文件、管理笔记，并通过自然语言触发这些能力。
 
@@ -173,7 +173,7 @@ modules/openclaw-market-immersion/
 - 覆盖对应时间段内的 7x24 财经快讯流。
 - 对东方财富、财联社电报、金十数据、新浪财经、华尔街见闻等来源做去重和窗口完整性检查。
 - 把整理任务交给 OpenClaw，而不是在采集脚本里直接做最终判断。
-- 只有采集、OpenClaw 轻整理、Notion 发布都成功时，才把这一轮视为成功。
+- 只有采集、OpenClaw 轻整理和用户启用的发布步骤都成功时，才把这一轮视为成功。
 - 如果机器关机、WSL 未启动或网络中断，依靠 `systemd --user` timer 的 `Persistent=yes` 和 service retry 尽量在恢复后补跑。
 
 日报默认结构是：
