@@ -1,7 +1,7 @@
 # OpenClaw 养虾指南
 
 <p align="center">
-  <img src="openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/OpenClawMonitorIcon.png" alt="OpenClaw cute red mascot" width="120">
+  <img src="assets/openclaw-mascot.png" alt="OpenClaw 红色小助手" width="120">
 </p>
 
 这是一份给 Windows 用户准备的 OpenClaw 使用笔记，也是一套可以装进 Codex 的 skill。
