@@ -4,7 +4,7 @@
   <img src="openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/OpenClawMonitorIcon.png" alt="OpenClaw cute red mascot" width="120">
 </p>
 
-> 当前控制中心行为：打开 `OpenClaw Control` 只会显示本机状态，不会自动启动或关闭 OpenClaw。需要运行时点击 `开启 OpenClaw`；运行中按钮会变成 `关闭 OpenClaw`，再次点击才会真正关闭。`重新检测` 只重新读取状态，不负责启动或停止。Telegram 卡片会区分 `启动中`、`连接中`、`已收到未回复`、`已回复`，方便判断冷启动慢、模型还在处理，还是通道真的异常。
+> 当前控制中心行为：打开 `OpenClaw Control` 只会显示本机状态，不会自动启动或关闭 OpenClaw。需要运行时点击 `开启 OpenClaw`；运行中按钮会变成 `关闭 OpenClaw`，再次点击才会真正关闭。`重新检测` 只重新读取状态，不负责启动或停止。Telegram 卡片只显示通道是否已连接；顶部状态框内部会在冷启动时显示启动进度条，标出 gateway、Telegram、模型和 sidecar 预热等阶段，进度到 100% 后自动消失。
 
 这是我整理给自己和其他 OpenClaw 用户的一套 Windows/WSL 使用笔记和 Codex skill。
 

@@ -7,7 +7,7 @@ Windows 本机小程序面板，用于观察并手动控制运行在 Ubuntu on W
 面板显示：
 
 - gateway 和 Telegram 是否可用。
-- Telegram 冷启动和收发链路：启动中、连接中、已收到未回复、已回复。这样可以区分“刚启动还在预热”和“真的没有收到消息”。
+- Telegram 是否已连接。冷启动细节不要塞进 Telegram 卡片，而是在顶部状态框内部用临时启动进度条显示：gateway 检查、Telegram 启动、Telegram 连接、模型/sidecar 预热。进度到 100% 后自动隐藏。
 - 后台是否存在 `queued/running` task、活跃 TaskFlow，或正在持续产出的本地 daemon / 工作区产物心跳。
 - Token / 上下文使用快照，以及主会话、Telegram、子任务的流向。
 - 从当月本地 session 日志里的 `usage.cost` 汇总已记录成本，并按模型列出成本和 token 去向；每个自然月刷新一次，这不是服务商账单替代品。

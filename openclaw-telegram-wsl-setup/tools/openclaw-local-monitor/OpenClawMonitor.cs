@@ -146,6 +146,9 @@ namespace OpenClawLocalMonitor
         public long TelegramLastStartAt = -1;
         public long TelegramLastInboundAt = -1;
         public long TelegramLastOutboundAt = -1;
+        public int StartupProgress;
+        public string StartupStep = "等待检测";
+        public string StartupProgressText = "等待首次刷新。";
         public int RunningTasks;
         public int AuditWarnings;
         public int AuditErrors;
@@ -233,6 +236,9 @@ namespace OpenClawLocalMonitor
         RoundedPanel costHintPopup;
         Label heroTitle;
         Label heroDetail;
+        RoundedPanel startupProgressPanel;
+        Label startupProgressText;
+        ProgressBar startupProgressBar;
         Label legendLine;
         DataGridView taskGrid;
         ListBox sessionList;
@@ -608,6 +614,27 @@ namespace OpenClawLocalMonitor
             hero.Controls.AddRange(new Control[] { heroTitle, heroDetail });
             Controls.Add(hero);
 
+            startupProgressPanel = new RoundedPanel
+            {
+                Location = new Point(30, 88),
+                Size = new Size(1094, 22),
+                BackColor = Color.White,
+                BorderColor = Color.FromArgb(226, 232, 240),
+                Radius = 9,
+                Visible = false
+            };
+            startupProgressText = MakeLabel("启动进度", 12, 2, 340, 18, 8.5f, Color.FromArgb(71, 85, 105), false);
+            startupProgressBar = new ProgressBar
+            {
+                Location = new Point(370, 5),
+                Size = new Size(700, 12),
+                Minimum = 0,
+                Maximum = 100,
+                Style = ProgressBarStyle.Continuous
+            };
+            startupProgressPanel.Controls.AddRange(new Control[] { startupProgressText, startupProgressBar });
+            hero.Controls.Add(startupProgressPanel);
+
             overall = new Card("状态", 28, 232, 176, 88);
             gateway = new Card("网关", 220, 232, 176, 88);
             telegram = new Card("Telegram", 412, 232, 176, 88);
@@ -759,7 +786,14 @@ namespace OpenClawLocalMonitor
                 {
                     hero.SetBounds(margin, 92, contentWidth, 118);
                     heroTitle.SetBounds(28, 18, Math.Max(420, contentWidth - 56), 38);
-                    heroDetail.SetBounds(30, 60, Math.Max(420, contentWidth - 60), 44);
+                    heroDetail.SetBounds(30, 60, Math.Max(420, contentWidth - 60), 26);
+                    if (startupProgressPanel != null)
+                    {
+                        var progressWidth = Math.Max(420, contentWidth - 60);
+                        startupProgressPanel.SetBounds(30, 88, progressWidth, 22);
+                        startupProgressText.SetBounds(12, 2, Math.Max(180, progressWidth - 420), 18);
+                        startupProgressBar.SetBounds(Math.Max(220, progressWidth - 700), 5, Math.Min(680, progressWidth - 240), 12);
+                    }
                 }
 
                 var topCards = new[] { overall, gateway, telegram, tasks, audit, session };
@@ -1133,6 +1167,7 @@ namespace OpenClawLocalMonitor
             var workspaceActivity = workspaceTask.Result;
 
             var snapshot = new Snapshot();
+            SetStartupProgress(snapshot, 0, "等待开启", "OpenClaw 未启动或正在等待检测。");
             if (!probe.Item1)
             {
                 gatewayProbeFailures++;
@@ -1143,12 +1178,14 @@ namespace OpenClawLocalMonitor
                     snapshot.State = "Degraded";
                     snapshot.GatewayText = "探针不稳定";
                     snapshot.GatewaySoftFailure = true;
+                    SetStartupProgress(snapshot, 35, "网关启动中", "OpenClaw 服务有响应，但本轮 gateway 探针超时。");
                     snapshot.StatusLine = "本轮 gateway 探针超时，但 OpenClaw 服务仍有响应；面板会继续自动重试。";
                 }
                 else
                 {
                     snapshot.State = "Problem";
                     snapshot.GatewayText = "探针失败";
+                    SetStartupProgress(snapshot, 0, "网关未响应", "gateway 探针失败，尚未进入可用启动链路。");
                     snapshot.StatusLine = string.IsNullOrWhiteSpace(probe.Item3) ? "gateway 探针连续失败。" : probe.Item3;
                 }
             }
@@ -1188,6 +1225,13 @@ namespace OpenClawLocalMonitor
                 || stateText.Equals("active", StringComparison.OrdinalIgnoreCase);
         }
 
+        void SetStartupProgress(Snapshot s, int percent, string step, string detail)
+        {
+            s.StartupProgress = Math.Max(0, Math.Min(100, percent));
+            s.StartupStep = string.IsNullOrWhiteSpace(step) ? "启动中" : step;
+            s.StartupProgressText = string.IsNullOrWhiteSpace(detail) ? s.StartupStep : detail;
+        }
+
         void FillFromProbe(Snapshot s, object probeObj)
         {
             var probe = AsDict(probeObj);
@@ -1206,6 +1250,7 @@ namespace OpenClawLocalMonitor
             s.GatewayText = s.GatewayOk
                 ? "可连接 " + (latency >= 0 ? latency + "毫秒" : "")
                 : "需检查";
+            SetStartupProgress(s, s.GatewayOk ? 55 : 35, s.GatewayOk ? "网关已响应" : "网关检查中", s.GatewayOk ? "gateway RPC 已响应，正在检查通道。" : "gateway 仍未稳定响应。");
 
             var tgConfigured = ToBool(Get(telegramChannel, "configured"));
             var tgRunning = ToBool(Get(telegramChannel, "running"));
@@ -1260,14 +1305,11 @@ namespace OpenClawLocalMonitor
             var configured = ToBool(Get(source, "configured"));
             var running = ToBool(Get(source, "running"));
             var connected = ToBool(Get(source, "connected"));
-            var lastError = Convert.ToString(Get(source, "lastError") ?? "");
             s.TelegramLastStartAt = ToLong(Get(source, "lastStartAt"));
             s.TelegramLastInboundAt = ToLong(Get(source, "lastInboundAt"));
             s.TelegramLastOutboundAt = ToLong(Get(source, "lastOutboundAt"));
 
             var startAgeMs = MillisecondsSince(s.TelegramLastStartAt);
-            var inAgeMs = MillisecondsSince(s.TelegramLastInboundAt);
-            var outAgeMs = MillisecondsSince(s.TelegramLastOutboundAt);
             var startupWindow = startAgeMs <= 120000;
 
             if (!configured)
@@ -1275,14 +1317,16 @@ namespace OpenClawLocalMonitor
                 s.TelegramOk = false;
                 s.TelegramText = "未配置";
                 s.TelegramCardState = "bad";
+                SetStartupProgress(s, 60, "Telegram 未配置", "gateway 已响应，但 Telegram 通道没有可用配置。");
                 return;
             }
 
             if (!running)
             {
                 s.TelegramOk = false;
-                s.TelegramText = startupWindow ? "启动中 " + AgeSince(s.TelegramLastStartAt) : "未运行";
+                s.TelegramText = "需检查";
                 s.TelegramCardState = startupWindow ? "warn" : "bad";
+                SetStartupProgress(s, startupWindow ? 65 : 60, "Telegram 启动中", startupWindow ? "Telegram 通道正在启动，已等待 " + AgeSince(s.TelegramLastStartAt) + "。" : "Telegram 通道未运行。");
                 if (startupWindow && s.State == "Problem") s.State = "Degraded";
                 return;
             }
@@ -1290,50 +1334,29 @@ namespace OpenClawLocalMonitor
             if (!connected)
             {
                 s.TelegramOk = false;
-                s.TelegramText = startupWindow ? "连接中 " + AgeSince(s.TelegramLastStartAt) : "未连接";
+                s.TelegramText = "需检查";
                 s.TelegramCardState = startupWindow ? "warn" : "bad";
+                SetStartupProgress(s, startupWindow ? 78 : 70, "Telegram 连接中", startupWindow ? "Telegram polling 正在连接，已等待 " + AgeSince(s.TelegramLastStartAt) + "。" : "Telegram 通道运行中，但尚未连接。");
                 if (startupWindow && s.State == "Problem") s.State = "Degraded";
                 return;
             }
 
             s.TelegramOk = true;
-            if (!string.IsNullOrWhiteSpace(lastError))
-            {
-                s.TelegramText = "有错误";
-                s.TelegramCardState = "warn";
-                return;
-            }
-
-            var hasInboundWaiting = s.TelegramLastInboundAt > 0
-                && (s.TelegramLastOutboundAt <= 0 || s.TelegramLastOutboundAt < s.TelegramLastInboundAt);
-            if (hasInboundWaiting)
-            {
-                s.TelegramText = inAgeMs <= 180000 ? "收到未回 " + AgeSince(s.TelegramLastInboundAt) : "久未回复 " + AgeSince(s.TelegramLastInboundAt);
-                s.TelegramCardState = inAgeMs <= 180000 ? "work" : "warn";
-                if (s.State != "Problem" && s.State != "Degraded") s.State = inAgeMs <= 180000 ? "Working" : "Degraded";
-                s.StatusLine = "Telegram 已收到消息但尚未回复：收到 " + AgeSince(s.TelegramLastInboundAt)
-                    + "，上次回复 " + AgeSince(s.TelegramLastOutboundAt) + "。";
-                return;
-            }
-
-            if (outAgeMs != long.MaxValue)
-            {
-                s.TelegramText = "已回复 " + AgeSince(s.TelegramLastOutboundAt);
-                s.TelegramCardState = "good";
-                return;
-            }
+            s.TelegramText = "已连接";
+            s.TelegramCardState = "good";
 
             if (startupWindow)
             {
-                s.TelegramText = "已连接 预热中";
-                s.TelegramCardState = "warn";
+                var warmupProgress = 85 + (int)Math.Min(14, Math.Max(0, startAgeMs / 9000));
+                SetStartupProgress(s, warmupProgress, "冷启动预热", "Telegram 已连接，等待模型、sidecar 和通道稳定：" + AgeSince(s.TelegramLastStartAt) + "。");
                 if (s.State == "Problem") s.State = "Degraded";
-                s.StatusLine = "Telegram 已连接，OpenClaw 刚启动 " + AgeSince(s.TelegramLastStartAt) + "，模型和 sidecar 可能仍在预热。";
+                if (string.IsNullOrWhiteSpace(s.StatusLine) || s.StatusLine.Contains("Telegram 已连接"))
+                    s.StatusLine = "Telegram 已连接；OpenClaw 刚启动 " + AgeSince(s.TelegramLastStartAt) + "，模型和 sidecar 可能仍在预热。";
                 return;
             }
 
-            s.TelegramText = "已连接";
-            s.TelegramCardState = "good";
+            var verified = s.TelegramLastOutboundAt > 0 && (s.TelegramLastStartAt <= 0 || s.TelegramLastOutboundAt >= s.TelegramLastStartAt);
+            SetStartupProgress(s, 100, verified ? "回复链路已验证" : "已就绪", verified ? "本次启动后已有 Telegram 回复记录。" : "gateway 和 Telegram 已稳定，冷启动窗口已结束。");
         }
 
         void FillTasks(Snapshot s, object tasksObj)
@@ -1845,6 +1868,13 @@ namespace OpenClawLocalMonitor
             heroTitle.Text = HeroTitle(s);
             heroDetail.Text = HeroDetail(s);
             heroTitle.ForeColor = HeroColor(s);
+            var showStartupProgress = s.StartupProgress > 0 && s.StartupProgress < 100;
+            startupProgressPanel.Visible = showStartupProgress;
+            if (showStartupProgress)
+            {
+                startupProgressBar.Value = Math.Max(startupProgressBar.Minimum, Math.Min(startupProgressBar.Maximum, s.StartupProgress));
+                startupProgressText.Text = s.StartupProgress + "% · " + s.StartupStep + " · " + s.StartupProgressText;
+            }
             overall.Value.Text = DisplayState(s.State);
             SetCard(overall, s.State == "Problem" ? "bad" : s.State == "Working" ? "work" : s.State == "Ready" ? "good" : "warn");
             gateway.Value.Text = s.GatewayText;
