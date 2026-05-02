@@ -16,7 +16,7 @@
 - **透明**：每一步都尽量能解释清楚，少一点“重启试试”的玄学。
 - **简单**：能自动恢复的就自动恢复，能放进控制中心看的就别让用户反复敲命令。
 
-它最开始只是为了解决 OpenClaw + Telegram + WSL2 的稳定性问题。后来慢慢补上了 keepalive、断网恢复、本机控制中心、Token/成本流向、语音识别辅助工具和一些可选 API 配置，所以现在更像一个完整的 Windows/WSL 工具包。
+它最开始只是为了解决 OpenClaw + Telegram + WSL2 的稳定性问题。后来慢慢补上了 keepalive、断网恢复、本机控制中心、Token/成本流向、市场信息浸泡模块、语音识别辅助工具和一些可选 API 配置，所以现在更像一个完整的 Windows/WSL 工具包。
 
 ## 这个项目解决什么问题
 
@@ -53,7 +53,7 @@ Windows
 
 ## 它能做什么
 
-这套东西主要分成五块。
+这套东西主要分成六块。
 
 第一块是安装和修复。它会优先按 Windows + WSL2 + Ubuntu 的路线处理 OpenClaw，先把 gateway、systemd user service、模型回复和权限范围确认好，再接 Telegram。
 
@@ -63,7 +63,9 @@ Windows
 
 第四块是 IMA 知识库接入。它记录了如何给 OpenClaw 安装官方 `ima-skills`，用 IMA OpenAPI 读取和搜索腾讯 ima 知识库、添加网页/微信文章、上传文件、管理笔记，并通过自然语言触发这些能力。
 
-第五块是可选增强。比如 Jina embeddings、Tavily web search、豆包/火山录音文件识别。这些不是基础安装必需项，只有真的需要语义记忆、联网检索或本地音频处理时再加。
+第五块是市场信息浸泡模块。它是一个可选 `openclaw-job-module`，用于按时间段抓取 7x24 财经快讯流，交给 OpenClaw 做轻整理，并在成功后发布到 Notion，必要时再把日报链接或文件推送到 Telegram。这个模块不是基础安装必需项，只有用户明确要市场日报、信息浸泡或 Notion 闭环时才安装。
+
+第六块是可选增强。比如 Jina embeddings、Tavily web search、豆包/火山录音文件识别。这些不是基础安装必需项，只有真的需要语义记忆、联网检索或本地音频处理时再加。
 
 另外，它会特别注意几件容易出事故的事：不要把 token 发到聊天里，不要把 key 写进仓库，不要随便重置配置，不要把“机器人没回”直接等同于“Telegram token 坏了”。
 
@@ -73,6 +75,13 @@ Windows
 .
 |-- README.md
 |-- .gitignore
+|-- modules/
+|   `-- openclaw-market-immersion/
+|       |-- README.md
+|       |-- module.json
+|       |-- config/
+|       |-- scripts/
+|       `-- systemd/
 `-- openclaw-telegram-wsl-setup/
     |-- SKILL.md
     |-- agents/
@@ -109,6 +118,42 @@ openclaw-telegram-wsl-setup/
 ```
 
 这个目录名暂时保留是为了兼容已经安装的 Codex skill 和旧链接；公开项目名称以 **OpenClaw 养虾指南** 为准。这个目录应保持干净，只包含 skill 本身需要的文件和可复用工具。不要把本机 OpenClaw 配置、Telegram token、日志、截图、编译产物或机器专属诊断文件放进去。
+
+## 市场信息浸泡模块
+
+仓库附带一个可选的市场信息浸泡模块：
+
+```text
+modules/openclaw-market-immersion/
+```
+
+它不是默认安装内容，也不是普通 Codex skill，而是给 OpenClaw 调用的 `openclaw-job-module`。只有用户明确要“市场信息浸泡”“财经快讯日报”“Notion 日报闭环”或类似长期自动化时，才引导用户决定是否安装。
+
+模块的目标是：
+
+- 按 09:05、12:15、15:20、22:10 四个时间点运行。
+- 覆盖对应时间段内的 7x24 财经快讯流。
+- 对东方财富、财联社电报、金十数据、新浪财经、华尔街见闻等来源做去重和窗口完整性检查。
+- 把整理任务交给 OpenClaw，而不是在采集脚本里直接做最终判断。
+- 只有采集、OpenClaw 轻整理、Notion 发布都成功时，才把这一轮视为成功。
+- 如果机器关机、WSL 未启动或网络中断，依靠 `systemd --user` timer 的 `Persistent=yes` 和 service retry 尽量在恢复后补跑。
+
+日报默认结构是：
+
+```text
+1. 今日市场总览
+2. 高频主题/板块
+3. 公司公告与事件
+4. 研报/机构观点
+5. 政策与宏观信息
+6. 异动股票/板块
+7. 自选股相关信息
+8. 未归类信息
+9. 原始消息流
+观察备忘
+```
+
+1-8 是轻整理后的文本和信源；9 保留对应时间段内按时间顺序排列的原始消息流。Notion、Telegram 推送和定时器都应由用户明确选择启用；密钥只通过本地终端或提供商页面输入，不进入聊天和仓库。
 
 ## 本机 OpenClaw 控制中心
 
