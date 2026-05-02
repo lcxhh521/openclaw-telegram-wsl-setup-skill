@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "timezone": "Asia/Shanghai",
+  "workspace_dir": "/home/lcxhh/.openclaw/workspace",
+  "output_dir": "/home/lcxhh/.openclaw/workspace/market-immersion",
+  "venv_python": "/home/lcxhh/.openclaw/workspace/.venv-mxskills/bin/python",
+  "openclaw_bin": "/home/lcxhh/.local/bin/openclaw",
+  "secrets_env": "/home/lcxhh/.openclaw/secrets/mx.env",
+  "notion": {
+    "enabled": true,
+    "secrets_env": "/home/lcxhh/.openclaw/secrets/notion.env",
+    "token_env": "NOTION_TOKEN",
+    "parent_page_id_env": "NOTION_PARENT_PAGE_ID",
+    "parent_page_id": "3548c93dc6b480a5b6ebe997305a30ff",
+    "publish_smoke": false,
+    "timeout": 120
+  },
+  "openclaw_summary": {
+    "enabled": true,
+    "required": true,
+    "summarize_smoke": true,
+    "agent": "main",
+    "thinking": "low",
+    "timeout": 300,
+    "retries": 3,
+    "max_item_chars": 500,
+    "max_message_chars": 60000
+  },
+  "eastmoney_feed": {
+    "enabled": true,
+    "page_size": 100,
+    "max_pages": 20,
+    "smoke_max_pages": 1,
+    "smoke_max_items_per_source": 10,
+    "timeout": 30,
+    "columns": [
+      {
+        "id": "finance_main",
+        "name": "东方财富财经资讯",
+        "column": "350"
+      }
+    ],
+    "eastmoney_7x24": [
+      {
+        "id": "eastmoney_focus",
+        "name": "东方财富焦点快讯",
+        "column": "101",
+        "limit": 50,
+        "max_pages": 20
+      },
+      {
+        "id": "eastmoney_global_live",
+        "name": "东方财富7x24全球直播",
+        "column": "102",
+        "limit": 50,
+        "max_pages": 20
+      },
+      {
+        "id": "eastmoney_company",
+        "name": "东方财富上市公司快讯",
+        "column": "103",
+        "limit": 50,
+        "max_pages": 20
+      },
+      {
+        "id": "eastmoney_global_stock",
+        "name": "东方财富全球股市快讯",
+        "column": "105",
+        "limit": 50,
+        "max_pages": 20
+      },
+      {
+        "id": "eastmoney_commodity",
+        "name": "东方财富商品快讯",
+        "column": "106",
+        "limit": 50,
+        "max_pages": 20
+      },
+      {
+        "id": "eastmoney_fx",
+        "name": "东方财富外汇快讯",
+        "column": "107",
+        "limit": 50,
+        "max_pages": 20
+      },
+      {
+        "id": "eastmoney_bond",
+        "name": "东方财富债券快讯",
+        "column": "108",
+        "limit": 50,
+        "max_pages": 20
+      },
+      {
+        "id": "eastmoney_fund",
+        "name": "东方财富基金快讯",
+        "column": "109",
+        "limit": 50,
+        "max_pages": 20
+      }
+    ],
+    "cls_telegraph": [
+      {
+        "id": "cls_all",
+        "name": "财联社电报",
+        "rn": 100,
+        "max_pages": 20
+      }
+    ],
+    "jin10_flash": [
+      {
+        "id": "jin10_all",
+        "name": "金十数据快讯",
+        "channel": "-8200",
+        "max_pages": 10
+      }
+    ],
+    "sina_7x24": [
+      {
+        "id": "sina_finance",
+        "name": "新浪财经7x24",
+        "zhibo_id": "152",
+        "page_size": 100,
+        "max_pages": 20
+      }
+    ],
+    "wallstreetcn_live": [
+      {
+        "id": "wallstreetcn_global",
+        "name": "华尔街见闻7x24",
+        "channel": "global-channel",
+        "limit": 50,
+        "max_pages": 20
+      }
+    ],
+    "require_complete_window": true
+  },
+  "mx_search_supplement": {
+    "enabled": false,
+    "enabled_for_smoke": true
+  },
+  "telegram": {
+    "enabled": true,
+    "channel": "telegram",
+    "target": "7215741815",
+    "account": "default",
+    "send_mode": "document",
+    "send_smoke": false,
+    "timeout": 120
+  },
+  "runs": {
+    "smoke": {
+      "label": "连通性测试",
+      "queries": [
+        {
+          "id": "smoke_market",
+          "skill": "mx-search",
+          "query": "今日A股市场重要信息 测试查询"
+        }
+      ]
+    },
+    "morning": {
+      "label": "盘前信息浸泡",
+      "queries": [
+        {
+          "id": "market_overview",
+          "skill": "mx-search",
+          "query": "今日A股市场盘前重要信息 新闻 公告 政策 研报 产业事件 汇总"
+        },
+        {
+          "id": "macro_policy",
+          "skill": "mx-search",
+          "query": "今日影响A股的宏观政策 监管政策 产业政策 重要会议 消息"
+        },
+        {
+          "id": "industry_themes",
+          "skill": "mx-search",
+          "query": "今日A股热门行业 热门主题 板块催化 新闻 研报 政策"
+        },
+        {
+          "id": "announcements",
+          "skill": "mx-search",
+          "query": "今日A股上市公司重要公告 业绩 重大合同 并购 重组 减持 增持 风险提示"
+        },
+        {
+          "id": "research_views",
+          "skill": "mx-search",
+          "query": "今日A股机构研报 评级调整 行业观点 公司观点 汇总"
+        }
+      ]
+    },
+    "midday": {
+      "label": "午间信息浸泡",
+      "queries": [
+        {
+          "id": "midday_market",
+          "skill": "mx-search",
+          "query": "今日A股午间市场异动 板块异动 个股异动 资金关注 新闻原因"
+        },
+        {
+          "id": "midday_topics",
+          "skill": "mx-search",
+          "query": "今日上午A股反复出现的市场主题 新闻 产业政策 个股事件"
+        },
+        {
+          "id": "midday_announcements",
+          "skill": "mx-search",
+          "query": "今日上午A股重要公告 公司事件 风险提示"
+        }
+      ]
+    },
+    "close": {
+      "label": "收盘信息浸泡",
+      "queries": [
+        {
+          "id": "close_review",
+          "skill": "mx-search",
+          "query": "今日A股收盘复盘 板块涨跌 个股异动 成交量 资金流 新闻原因"
+        },
+        {
+          "id": "after_close_announcements",
+          "skill": "mx-search",
+          "query": "今日收盘后A股上市公司重要公告 业绩 重大事项 风险提示"
+        },
+        {
+          "id": "after_close_research",
+          "skill": "mx-search",
+          "query": "今日收盘后机构研报 行业观点 公司观点 评级调整"
+        },
+        {
+          "id": "daily_repeated_terms",
+          "skill": "mx-search",
+          "query": "今日A股市场高频关键词 反复出现的主题 板块 公司 新闻线索"
+        }
+      ]
+    },
+    "night": {
+      "label": "夜间信息归档",
+      "queries": [
+        {
+          "id": "overnight_watch",
+          "skill": "mx-search",
+          "query": "今晚到明日盘前可能影响A股的信息 海外市场 宏观政策 产业新闻 公司公告"
+        },
+        {
+          "id": "global_china_assets",
+          "skill": "mx-search",
+          "query": "隔夜海外市场 美股 港股 中概股 大宗商品 汇率 对A股可能相关的信息"
+        },
+        {
+          "id": "tomorrow_calendar",
+          "skill": "mx-search",
+          "query": "明日A股重要事件日历 新股申购 限售解禁 业绩披露 会议 数据 发布"
+        }
+      ]
+    }
+  }
+}

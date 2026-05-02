@@ -1,0 +1,41 @@
+{
+  "id": "market-immersion",
+  "name": "OpenClaw Market Immersion",
+  "type": "openclaw-job-module",
+  "version": "0.1.0",
+  "description": "Scheduled market information immersion collector and Notion publisher for OpenClaw.",
+  "entrypoint": "scripts/run_market_immersion.sh",
+  "config": "config/market_immersion_config.json",
+  "output_dir": "~/.openclaw/workspace/market-immersion",
+  "phases": {
+    "morning": {
+      "schedule": "09:05",
+      "service": "openclaw-market-immersion-morning.service",
+      "timer": "openclaw-market-immersion.timer"
+    },
+    "midday": {
+      "schedule": "12:15",
+      "service": "openclaw-market-immersion-midday.service",
+      "timer": "openclaw-market-immersion-midday.timer"
+    },
+    "close": {
+      "schedule": "15:20",
+      "service": "openclaw-market-immersion-close.service",
+      "timer": "openclaw-market-immersion-close.timer"
+    },
+    "night": {
+      "schedule": "22:10",
+      "service": "openclaw-market-immersion-night.service",
+      "timer": "openclaw-market-immersion-night.timer"
+    }
+  },
+  "publishing": {
+    "notion": true,
+    "telegram": true
+  },
+  "hard_requirements": {
+    "complete_feed_window": true,
+    "openclaw_summary": true,
+    "publish_only_after_success": true
+  }
+}

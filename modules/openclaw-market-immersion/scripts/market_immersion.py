@@ -1,0 +1,2017 @@
+#!/usr/bin/env python3
+"""Market information immersion runner for OpenClaw.
+
+Phase 1 design: collect broad market information and preserve raw source output.
+This script intentionally avoids strong filtering and trading advice.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import email.utils
+import hashlib
+import html
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if not path.exists():
+        return env
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env[key.strip()] = value.strip().strip('"').strip("'")
+    return env
+
+
+def safe_name(text: str) -> str:
+    keep = []
+    for ch in text:
+        if ch.isalnum() or ch in ("-", "_"):
+            keep.append(ch)
+        else:
+            keep.append("_")
+    name = "".join(keep).strip("._")
+    while "__" in name:
+        name = name.replace("__", "_")
+    return name[:80] or "query"
+
+
+def now_local() -> dt.datetime:
+    return dt.datetime.now().astimezone()
+
+
+def parse_iso(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def default_window_start(phase: str, end: dt.datetime) -> dt.datetime:
+    boundaries = {
+        "morning": (1, dt.time(22, 10)),
+        "midday": (0, dt.time(9, 5)),
+        "close": (0, dt.time(12, 15)),
+        "night": (0, dt.time(15, 20)),
+    }
+    days_back, boundary_time = boundaries.get(phase, (0, dt.time(0, 0)))
+    day = (end - dt.timedelta(days=days_back)).date()
+    return dt.datetime.combine(day, boundary_time, tzinfo=end.tzinfo)
+
+
+def compute_window(
+    *,
+    phase: str,
+    output_root: Path,
+    end: dt.datetime,
+) -> tuple[dt.datetime | None, dt.datetime | None, str]:
+    if phase == "smoke":
+        return None, None, "smoke"
+
+    state_path = output_root / "state.json"
+    state: dict[str, Any] = {}
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            state = {}
+
+    last_success = parse_iso(state.get("last_success_at"))
+    default_start = default_window_start(phase, end)
+    if last_success and last_success < end:
+        return last_success, end, "last_success"
+    return default_start, end, "scheduled_boundary"
+
+
+def format_window_for_query(start: dt.datetime | None, end: dt.datetime | None) -> str:
+    if not start or not end:
+        return ""
+    return (
+        f"时间范围：{start.strftime('%Y-%m-%d %H:%M')} 至 "
+        f"{end.strftime('%Y-%m-%d %H:%M')}。"
+        "请尽量只收集这个时间段内出现、发布、更新或发酵的信息；"
+        "不要把摘要当成原文替代。"
+    )
+
+
+def run_skill(
+    *,
+    workspace: Path,
+    venv_python: Path,
+    skill: str,
+    query: str,
+    output_dir: Path,
+    env: dict[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    script_by_skill = {
+        "mx-search": workspace / "skills" / "mx-search" / "mx_search.py",
+        "mx-data": workspace / "skills" / "mx-data" / "mx_data.py",
+        "mx-xuangu": workspace / "skills" / "mx-xuangu" / "mx_xuangu.py",
+        "mx-zixuan": workspace / "skills" / "mx-zixuan" / "mx_zixuan.py",
+        "mx-moni": workspace / "skills" / "mx-moni" / "mx_moni.py",
+    }
+    script = script_by_skill.get(skill)
+    if not script:
+        raise ValueError(f"Unsupported skill: {skill}")
+    if not script.exists():
+        raise FileNotFoundError(f"Skill script not found: {script}")
+
+    cmd = [str(venv_python), str(script), query, str(output_dir)]
+    return subprocess.run(
+        cmd,
+        cwd=str(workspace),
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def fetch_json_url(url: str, timeout: int = 30) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 OpenClaw Market Immersion",
+            "Accept": "application/json,text/plain,*/*",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_text_url(url: str, timeout: int = 30, headers: dict[str, str] | None = None) -> str:
+    request_headers = {
+        "User-Agent": "Mozilla/5.0 OpenClaw Market Immersion",
+        "Accept": "application/rss+xml,application/xml,text/xml,text/plain,*/*",
+    }
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(url, headers=request_headers)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def parse_rss_datetime(value: Any) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = email.utils.parsedate_to_datetime(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=now_local().tzinfo)
+        return parsed.astimezone(now_local().tzinfo)
+    except (TypeError, ValueError):
+        return parse_item_datetime(value, now_local().tzinfo)
+
+
+def dedupe_key_for_item(*, title: str, content: str, url: str, code: str = "") -> str:
+    normalized = " ".join((title or content or url or code).lower().split())
+    raw = url.strip() or code.strip() or normalized
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def strip_html(text: Any) -> str:
+    value = html.unescape(str(text or ""))
+    value = re.sub(r"<br\s*/?>", "\n", value, flags=re.I)
+    value = re.sub(r"<[^>]+>", "", value)
+    return " ".join(value.split())
+
+
+def cls_query_sign(query: str) -> str:
+    sha1_value = hashlib.sha1(query.encode("utf-8")).hexdigest()
+    return hashlib.md5(sha1_value.encode("utf-8")).hexdigest()
+
+
+def classify_time_bucket(
+    *,
+    value: Any,
+    window_start: dt.datetime | None,
+    window_end: dt.datetime | None,
+) -> tuple[str, dt.datetime | None]:
+    parsed = parse_item_datetime(value, window_end.tzinfo if window_end else None)
+    if not window_start or not window_end:
+        return "unwindowed", parsed
+    if not parsed:
+        return "undated", None
+    if window_start <= parsed <= window_end:
+        return "in_window", parsed
+    if parsed < window_start:
+        return "carryover", parsed
+    return "future_or_clock_skew", parsed
+
+
+def should_keep_feed_item(
+    *,
+    value: Any,
+    window_start: dt.datetime | None,
+    window_end: dt.datetime | None,
+) -> tuple[bool, bool, str, dt.datetime | None]:
+    bucket, parsed = classify_time_bucket(
+        value=value,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    if bucket == "future_or_clock_skew":
+        return False, False, bucket, parsed
+    if bucket == "carryover" and window_start and parsed and parsed < window_start:
+        return False, True, bucket, parsed
+    return True, False, bucket, parsed
+
+
+def collect_eastmoney_feed_entry(
+    *,
+    config: dict[str, Any],
+    output_dir: Path,
+    window_start: dt.datetime | None,
+    window_end: dt.datetime | None,
+) -> dict[str, Any] | None:
+    feed_config = config.get("eastmoney_feed") or {}
+    if not feed_config.get("enabled", False):
+        return None
+
+    columns = feed_config.get("columns") or []
+    if not columns:
+        return None
+
+    page_size = int(feed_config.get("page_size") or 100)
+    max_pages = int(feed_config.get("max_pages") or 20)
+    timeout = int(feed_config.get("timeout") or 30)
+    raw_files: list[str] = []
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    counts = {
+        "in_window": 0,
+        "carryover": 0,
+        "future_or_clock_skew": 0,
+        "undated": 0,
+        "unwindowed": 0,
+    }
+    started = time.time()
+    messages: list[str] = []
+    coverage: list[dict[str, Any]] = []
+
+    def begin_coverage(source: str, expected: str) -> dict[str, Any]:
+        item = {
+            "source": source,
+            "expected": expected,
+            "item_count": 0,
+            "newest_time": None,
+            "oldest_time": None,
+            "reached_window_start": window_start is None,
+            "error": None,
+            "_newest_ts": None,
+            "_oldest_ts": None,
+        }
+        coverage.append(item)
+        return item
+
+    def note_coverage(item: dict[str, Any], parsed: dt.datetime | None) -> None:
+        if not parsed:
+            return
+        timestamp = parsed.timestamp()
+        newest = item.get("_newest_ts")
+        oldest = item.get("_oldest_ts")
+        if newest is None or timestamp > float(newest):
+            item["_newest_ts"] = timestamp
+            item["newest_time"] = parsed.isoformat(timespec="seconds")
+        if oldest is None or timestamp < float(oldest):
+            item["_oldest_ts"] = timestamp
+            item["oldest_time"] = parsed.isoformat(timespec="seconds")
+        if window_start and parsed <= window_start:
+            item["reached_window_start"] = True
+
+    def finish_coverage() -> None:
+        for item in coverage:
+            item.pop("_newest_ts", None)
+            item.pop("_oldest_ts", None)
+
+    def effective_max_pages(value: int) -> int:
+        if window_start is None:
+            return max(1, min(value, int(feed_config.get("smoke_max_pages") or 1)))
+        return value
+
+    def smoke_source_done(item: dict[str, Any]) -> bool:
+        if window_start is not None:
+            return False
+        return int(item.get("item_count") or 0) >= int(feed_config.get("smoke_max_items_per_source") or 15)
+
+    for column in columns:
+        column_id = str(column.get("column") or "").strip()
+        column_name = str(column.get("name") or column_id).strip()
+        if not column_id:
+            continue
+        source_coverage = begin_coverage(
+            column_name,
+            "东方财富栏目资讯流按页拉取，直到最旧消息早于本次窗口起点。",
+        )
+        stop_column = False
+        for page in range(1, effective_max_pages(max_pages) + 1):
+            params = {
+                "client": "web",
+                "biz": "web_news_col",
+                "column": column_id,
+                "pageSize": page_size,
+                "page": page,
+                "req_trace": str(int(time.time() * 1000)),
+            }
+            url = "https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?" + urllib.parse.urlencode(params)
+            raw_path = output_dir / f"eastmoney_feed_{safe_name(column_name)}_p{page}.json"
+            try:
+                data = fetch_json_url(url, timeout=timeout)
+                raw_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                raw_files.append(str(raw_path))
+            except Exception as exc:  # noqa: BLE001
+                messages.append(f"{column_name} page {page}: {exc}")
+                source_coverage["error"] = str(exc)
+                break
+
+            rows = (((data.get("data") or {}).get("list")) or [])
+            if not rows:
+                break
+
+            for index, row in enumerate(rows, 1):
+                if not isinstance(row, dict):
+                    continue
+                code = str(row.get("code") or row.get("newsId") or row.get("uniqueUrl") or row.get("url") or "")
+                title = str(row.get("title") or "").strip()
+                date = str(row.get("showTime") or row.get("time") or row.get("date") or "").strip()
+                dedupe_key = dedupe_key_for_item(
+                    title=title,
+                    content=str(row.get("summary") or row.get("digest") or row.get("content") or ""),
+                    url=str(row.get("uniqueUrl") or row.get("url") or ""),
+                    code=code,
+                )
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                bucket, parsed = classify_time_bucket(
+                    value=date,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                note_coverage(source_coverage, parsed)
+                if bucket == "future_or_clock_skew":
+                    continue
+                if bucket == "carryover" and window_start and parsed and parsed < window_start:
+                    stop_column = True
+                    continue
+                item = {
+                    "index": len(items) + 1,
+                    "code": code,
+                    "title": title,
+                    "content": row.get("summary") or row.get("digest") or row.get("content") or title,
+                    "date": date,
+                    "source": row.get("mediaName") or "东方财富",
+                    "type": column_name,
+                    "entity": "",
+                    "url": row.get("uniqueUrl") or row.get("url") or "",
+                    "raw_file": str(raw_path),
+                    "bucket": bucket,
+                    "parsed_at": parsed.isoformat(timespec="seconds") if parsed else None,
+                }
+                items.append(item)
+                source_coverage["item_count"] += 1
+                counts[bucket] += 1
+                if smoke_source_done(source_coverage):
+                    stop_column = True
+                    break
+            if stop_column:
+                break
+
+    for feed in feed_config.get("eastmoney_7x24") or []:
+        name = str(feed.get("name") or "东方财富7x24快讯")
+        source_coverage = begin_coverage(
+            name,
+            "东方财富移动页快讯接口按 column/p/limit 分页拉取，直到最旧消息早于本次窗口起点。",
+        )
+        column = str(feed.get("column") or feed.get("type") or "102")
+        limit = int(feed.get("limit") or 50)
+        max_pages_feed = effective_max_pages(int(feed.get("max_pages") or 20))
+        api_url = str(feed.get("url") or "https://newsinfo.eastmoney.com/kuaixun/v2/api/list").strip()
+        stop_feed = False
+        for page in range(1, max_pages_feed + 1):
+            params = {"column": column, "p": page, "limit": limit}
+            url = api_url + ("&" if "?" in api_url else "?") + urllib.parse.urlencode(params)
+            raw_path = output_dir / f"feed_eastmoney_kuaixun_{safe_name(name)}_{column}_p{page}.json"
+            try:
+                data = fetch_json_url(url, timeout=timeout)
+                raw_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                raw_files.append(str(raw_path))
+                rows = data.get("news") or []
+            except Exception as exc:  # noqa: BLE001
+                messages.append(f"{name} page {page}: {exc}")
+                source_coverage["error"] = str(exc)
+                break
+            if not rows:
+                break
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                date_text = str(row.get("showtime") or row.get("ordertime") or "").strip()
+                keep, stop, bucket, parsed = should_keep_feed_item(
+                    value=date_text,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                note_coverage(source_coverage, parsed)
+                if stop:
+                    stop_feed = True
+                    continue
+                if not keep:
+                    continue
+                title = str(row.get("title") or "").strip()
+                content = str(row.get("digest") or row.get("simdigest") or title).strip()
+                url_value = str(row.get("url_unique") or row.get("url_w") or row.get("url_m") or "").strip()
+                key = dedupe_key_for_item(
+                    title=title,
+                    content=content,
+                    url=url_value,
+                    code=str(row.get("newsid") or row.get("id") or ""),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = {
+                    "index": len(items) + 1,
+                    "code": str(row.get("newsid") or row.get("id") or ""),
+                    "title": title,
+                    "content": content or title,
+                    "date": date_text,
+                    "source": "东方财富快讯",
+                    "type": name,
+                    "entity": "",
+                    "url": url_value,
+                    "raw_file": str(raw_path),
+                    "bucket": bucket,
+                    "parsed_at": parsed.isoformat(timespec="seconds") if parsed else None,
+                }
+                items.append(item)
+                source_coverage["item_count"] += 1
+                counts[bucket] += 1
+                if smoke_source_done(source_coverage):
+                    stop_feed = True
+                    break
+            if stop_feed:
+                break
+
+    for feed in feed_config.get("cls_telegraph") or []:
+        name = str(feed.get("name") or "财联社电报")
+        source_coverage = begin_coverage(
+            name,
+            "财联社电报接口按 lastTime/last_time 翻页拉取，直到最旧消息早于本次窗口起点。",
+        )
+        rn = int(feed.get("rn") or 200)
+        max_pages_feed = effective_max_pages(int(feed.get("max_pages") or 20))
+        last_time = int(now_local().timestamp())
+        stop_feed = False
+        for page in range(1, max_pages_feed + 1):
+            query = (
+                f"app=CailianpressWeb&category=&lastTime={last_time}&last_time={last_time}"
+                f"&os=web&refresh_type=1&rn={rn}&sv=8.4.6"
+            )
+            url = "https://www.cls.cn/nodeapi/telegraphList?" + query + "&sign=" + cls_query_sign(query)
+            raw_path = output_dir / f"feed_cls_{safe_name(name)}_p{page}.json"
+            try:
+                request = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 OpenClaw Market Immersion",
+                        "Referer": "https://www.cls.cn/telegraph",
+                        "Accept": "application/json,text/plain,*/*",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                raw_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                raw_files.append(str(raw_path))
+                rows = (((data.get("data") or {}).get("roll_data")) or [])
+            except Exception as exc:  # noqa: BLE001
+                messages.append(f"{name} page {page}: {exc}")
+                source_coverage["error"] = str(exc)
+                break
+            if not rows:
+                break
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                ts = row.get("ctime")
+                parsed = dt.datetime.fromtimestamp(int(ts), tz=window_end.tzinfo if window_end else now_local().tzinfo) if ts else None
+                date_text = parsed.isoformat(sep=" ", timespec="seconds") if parsed else ""
+                keep, stop, bucket, parsed = should_keep_feed_item(
+                    value=date_text,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                note_coverage(source_coverage, parsed)
+                if stop:
+                    stop_feed = True
+                    continue
+                if not keep:
+                    continue
+                title = str(row.get("title") or row.get("brief") or "").strip()
+                content = str(row.get("brief") or row.get("content") or title).strip()
+                url_value = str(row.get("shareurl") or row.get("url") or "https://www.cls.cn/telegraph").strip()
+                key = dedupe_key_for_item(title=title, content=content, url=url_value, code=str(row.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = {
+                    "index": len(items) + 1,
+                    "code": str(row.get("id") or ""),
+                    "title": title,
+                    "content": content or title,
+                    "date": date_text,
+                    "source": "财联社",
+                    "type": name,
+                    "entity": "",
+                    "url": url_value,
+                    "raw_file": str(raw_path),
+                    "bucket": bucket,
+                    "parsed_at": parsed.isoformat(timespec="seconds") if parsed else None,
+                }
+                items.append(item)
+                source_coverage["item_count"] += 1
+                counts[bucket] += 1
+                if smoke_source_done(source_coverage):
+                    stop_feed = True
+                    break
+            last_times = [int(row.get("ctime")) for row in rows if isinstance(row, dict) and row.get("ctime")]
+            if last_times:
+                last_time = min(last_times)
+            if stop_feed:
+                break
+
+    for feed in feed_config.get("jin10_flash") or []:
+        name = str(feed.get("name") or "金十数据")
+        source_coverage = begin_coverage(
+            name,
+            "金十快讯接口按 max_time 翻页，直到最旧消息早于本次窗口起点。",
+        )
+        channel = str(feed.get("channel") or "-8200")
+        max_pages_feed = effective_max_pages(int(feed.get("max_pages") or 10))
+        max_time = ""
+        for page in range(1, max_pages_feed + 1):
+            params = {"channel": channel, "vip": "1"}
+            if max_time:
+                params["max_time"] = max_time
+            url = "https://flash-api.jin10.com/get_flash_list?" + urllib.parse.urlencode(params)
+            raw_path = output_dir / f"feed_jin10_{safe_name(name)}_p{page}.json"
+            try:
+                request = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 OpenClaw Market Immersion",
+                        "x-app-id": "bVBF4FyRTn5NJF5n",
+                        "x-version": "1.0.0",
+                        "Accept": "application/json,text/plain,*/*",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                raw_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                raw_files.append(str(raw_path))
+                rows = data.get("data") or []
+            except Exception as exc:  # noqa: BLE001
+                messages.append(f"{name} page {page}: {exc}")
+                source_coverage["error"] = str(exc)
+                break
+            if not rows:
+                break
+            stop_feed = False
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                date_text = str(row.get("time") or "")
+                keep, stop, bucket, parsed = should_keep_feed_item(
+                    value=date_text,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                note_coverage(source_coverage, parsed)
+                if stop:
+                    stop_feed = True
+                    continue
+                if not keep:
+                    continue
+                data_obj = row.get("data") or {}
+                content = str(data_obj.get("content") or data_obj.get("title") or "").replace("<br/>", "\n")
+                title = str(data_obj.get("title") or content).strip()
+                url_value = str(data_obj.get("link") or "https://www.jin10.com/flash")
+                key = dedupe_key_for_item(title=title, content=content, url=url_value, code=str(row.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = {
+                    "index": len(items) + 1,
+                    "code": str(row.get("id") or ""),
+                    "title": title,
+                    "content": content or title,
+                    "date": date_text,
+                    "source": "金十数据",
+                    "type": name,
+                    "entity": "",
+                    "url": url_value,
+                    "raw_file": str(raw_path),
+                    "bucket": bucket,
+                    "parsed_at": parsed.isoformat(timespec="seconds") if parsed else None,
+                }
+                items.append(item)
+                source_coverage["item_count"] += 1
+                counts[bucket] += 1
+                if smoke_source_done(source_coverage):
+                    stop_feed = True
+                    break
+            max_time = str(rows[-1].get("time") or "")
+            if stop_feed:
+                break
+
+    for feed in feed_config.get("sina_7x24") or []:
+        name = str(feed.get("name") or "新浪财经7x24")
+        source_coverage = begin_coverage(
+            name,
+            "新浪财经7x24直播接口按 page/page_size 翻页拉取，直到最旧消息早于本次窗口起点。",
+        )
+        zhibo_id = str(feed.get("zhibo_id") or "152")
+        page_size = int(feed.get("page_size") or 100)
+        max_pages_feed = effective_max_pages(int(feed.get("max_pages") or 20))
+        api_url = str(feed.get("url") or "http://zhibo.sina.com.cn/api/zhibo/feed").strip()
+        stop_feed = False
+        for page in range(1, max_pages_feed + 1):
+            params = {"page": page, "page_size": page_size, "zhibo_id": zhibo_id}
+            url = api_url + ("&" if "?" in api_url else "?") + urllib.parse.urlencode(params)
+            raw_path = output_dir / f"feed_sina_7x24_{safe_name(name)}_p{page}.json"
+            try:
+                data = fetch_json_url(url, timeout=timeout)
+                raw_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                raw_files.append(str(raw_path))
+                rows = (((((data.get("result") or {}).get("data") or {}).get("feed") or {}).get("list")) or [])
+            except Exception as exc:  # noqa: BLE001
+                messages.append(f"{name} page {page}: {exc}")
+                source_coverage["error"] = str(exc)
+                break
+            if not rows:
+                break
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                date_text = str(row.get("create_time") or row.get("update_time") or "").strip()
+                keep, stop, bucket, parsed = should_keep_feed_item(
+                    value=date_text,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                note_coverage(source_coverage, parsed)
+                if stop:
+                    stop_feed = True
+                    continue
+                if not keep:
+                    continue
+                content = strip_html(row.get("rich_text") or "")
+                title = content[:80] or str(row.get("id") or "")
+                url_value = str(row.get("docurl") or "").strip()
+                key = dedupe_key_for_item(title=title, content=content, url=url_value, code=str(row.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                tag_names = [
+                    str(tag.get("name"))
+                    for tag in row.get("tag") or []
+                    if isinstance(tag, dict) and tag.get("name")
+                ]
+                item = {
+                    "index": len(items) + 1,
+                    "code": str(row.get("id") or ""),
+                    "title": title,
+                    "content": content or title,
+                    "date": date_text,
+                    "source": "新浪财经",
+                    "type": name + (f" / {','.join(tag_names)}" if tag_names else ""),
+                    "entity": "",
+                    "url": url_value,
+                    "raw_file": str(raw_path),
+                    "bucket": bucket,
+                    "parsed_at": parsed.isoformat(timespec="seconds") if parsed else None,
+                }
+                items.append(item)
+                source_coverage["item_count"] += 1
+                counts[bucket] += 1
+                if smoke_source_done(source_coverage):
+                    stop_feed = True
+                    break
+            if stop_feed:
+                break
+
+    for feed in feed_config.get("wallstreetcn_live") or []:
+        name = str(feed.get("name") or "华尔街见闻7x24")
+        source_coverage = begin_coverage(
+            name,
+            "华尔街见闻7x24接口按 cursor 翻页拉取，直到最旧消息早于本次窗口起点。",
+        )
+        channel = str(feed.get("channel") or "global-channel")
+        limit = int(feed.get("limit") or 50)
+        max_pages_feed = effective_max_pages(int(feed.get("max_pages") or 20))
+        api_url = str(feed.get("url") or "https://api-one-wscn.awtmt.com/apiv1/content/lives").strip()
+        cursor = ""
+        stop_feed = False
+        for page in range(1, max_pages_feed + 1):
+            params = {"channel": channel, "client": "pc", "limit": limit}
+            if cursor:
+                params["cursor"] = cursor
+            url = api_url + ("&" if "?" in api_url else "?") + urllib.parse.urlencode(params)
+            raw_path = output_dir / f"feed_wallstreetcn_{safe_name(name)}_p{page}.json"
+            try:
+                data = fetch_json_url(url, timeout=timeout)
+                raw_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                raw_files.append(str(raw_path))
+                data_obj = data.get("data") or {}
+                rows = data_obj.get("items") or []
+                cursor = str(data_obj.get("next_cursor") or "")
+            except Exception as exc:  # noqa: BLE001
+                messages.append(f"{name} page {page}: {exc}")
+                source_coverage["error"] = str(exc)
+                break
+            if not rows:
+                break
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                raw_time = row.get("display_time")
+                parsed_dt = parse_item_datetime(raw_time, window_end.tzinfo if window_end else now_local().tzinfo)
+                normalized_date = parsed_dt.isoformat(sep=" ", timespec="seconds") if parsed_dt else str(raw_time or "")
+                keep, stop, bucket, parsed = should_keep_feed_item(
+                    value=normalized_date,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                note_coverage(source_coverage, parsed)
+                if stop:
+                    stop_feed = True
+                    continue
+                if not keep:
+                    continue
+                content = strip_html(row.get("content_text") or row.get("content") or "")
+                title = str(row.get("title") or "").strip() or content[:80]
+                url_value = str(row.get("uri") or "").strip()
+                key = dedupe_key_for_item(title=title, content=content, url=url_value, code=str(row.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = {
+                    "index": len(items) + 1,
+                    "code": str(row.get("id") or ""),
+                    "title": title,
+                    "content": content or title,
+                    "date": normalized_date,
+                    "source": "华尔街见闻",
+                    "type": name,
+                    "entity": "",
+                    "url": url_value,
+                    "raw_file": str(raw_path),
+                    "bucket": bucket,
+                    "parsed_at": parsed.isoformat(timespec="seconds") if parsed else None,
+                }
+                items.append(item)
+                source_coverage["item_count"] += 1
+                counts[bucket] += 1
+                if smoke_source_done(source_coverage):
+                    stop_feed = True
+                    break
+            if stop_feed or not cursor:
+                break
+
+    for feed in feed_config.get("sina_roll") or []:
+        name = str(feed.get("name") or "新浪财经滚动")
+        source_coverage = begin_coverage(
+            name,
+            "新浪财经滚动资讯接口按 page 翻页，直到最旧消息早于本次窗口起点。",
+        )
+        pageid = str(feed.get("pageid") or "153")
+        lid = str(feed.get("lid") or "2509")
+        num = int(feed.get("num") or 100)
+        max_pages_feed = effective_max_pages(int(feed.get("max_pages") or 20))
+        stop_feed = False
+        for page in range(1, max_pages_feed + 1):
+            params = {
+                "pageid": pageid,
+                "lid": lid,
+                "num": num,
+                "page": page,
+            }
+            url = "https://feed.sina.com.cn/api/roll/get?" + urllib.parse.urlencode(params)
+            raw_path = output_dir / f"feed_sina_roll_{safe_name(name)}_p{page}.json"
+            try:
+                data = fetch_json_url(url, timeout=timeout)
+                raw_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                raw_files.append(str(raw_path))
+                rows = (((data.get("result") or {}).get("data")) or [])
+            except Exception as exc:  # noqa: BLE001
+                messages.append(f"{name} page {page}: {exc}")
+                source_coverage["error"] = str(exc)
+                break
+            if not rows:
+                break
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                raw_time = row.get("ctime") or row.get("intime") or row.get("time")
+                parsed_dt = parse_item_datetime(raw_time, window_end.tzinfo if window_end else now_local().tzinfo)
+                normalized_date = parsed_dt.isoformat(sep=" ", timespec="seconds") if parsed_dt else str(raw_time or "")
+                keep, stop, bucket, parsed = should_keep_feed_item(
+                    value=normalized_date,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                note_coverage(source_coverage, parsed)
+                if stop:
+                    stop_feed = True
+                    continue
+                if not keep:
+                    continue
+                title = str(row.get("title") or "").strip()
+                content = str(row.get("intro") or row.get("summary") or row.get("content") or title).strip()
+                url_value = str(row.get("url") or row.get("wapurl") or "").strip()
+                key = dedupe_key_for_item(title=title, content=content, url=url_value, code=str(row.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = {
+                    "index": len(items) + 1,
+                    "code": str(row.get("id") or ""),
+                    "title": title,
+                    "content": content or title,
+                    "date": normalized_date,
+                    "source": str(row.get("media_name") or row.get("source") or "新浪财经"),
+                    "type": name,
+                    "entity": "",
+                    "url": url_value,
+                    "raw_file": str(raw_path),
+                    "bucket": bucket,
+                    "parsed_at": parsed.isoformat(timespec="seconds") if parsed else None,
+                }
+                items.append(item)
+                source_coverage["item_count"] += 1
+                counts[bucket] += 1
+                if smoke_source_done(source_coverage):
+                    stop_feed = True
+                    break
+            if stop_feed:
+                break
+
+    if not raw_files and not items:
+        return None
+
+    finish_coverage()
+    if window_start and bool(feed_config.get("require_complete_window", True)):
+        incomplete = [
+            item
+            for item in coverage
+            if item.get("error") or not item.get("reached_window_start")
+        ]
+        for item in incomplete:
+            reason = item.get("error") or "oldest item is still newer than window start"
+            messages.append(f"{item.get('source')}: incomplete window coverage: {reason}")
+
+    stdout = f"多源资讯流采集完成：{len(items)} 条。"
+    if messages:
+        stdout += "\n" + "\n".join(messages)
+    return {
+        "id": "eastmoney_feed",
+        "skill": "eastmoney-feed",
+        "base_query": "东方财富资讯流按时间窗口分页采集",
+        "query": "东方财富资讯流按时间窗口分页采集",
+        "returncode": 0 if not messages else 1,
+        "api_ok": not messages,
+        "api_messages": messages,
+        "classification": {"counts": counts, "items": items},
+        "feed_coverage": coverage,
+        "duration_ms": int((time.time() - started) * 1000),
+        "stdout": stdout,
+        "stderr": "",
+        "stdout_file": "",
+        "stderr_file": "",
+        "raw_files": raw_files,
+    }
+
+
+def inspect_api_files(raw_files: list[str]) -> tuple[bool, list[str]]:
+    if not raw_files:
+        return True, []
+    ok = True
+    messages: list[str] = []
+    for raw_file in raw_files:
+        try:
+            data = json.loads(Path(raw_file).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - keep diagnostics in manifest
+            ok = False
+            messages.append(f"{raw_file}: JSON read failed: {exc}")
+            continue
+        status = data.get("status")
+        message = data.get("message")
+        if status not in (None, 0, "0"):
+            ok = False
+            messages.append(f"{raw_file}: status={status} message={message}")
+    return ok, messages
+
+
+def parse_item_datetime(value: Any, tz: dt.tzinfo | None) -> dt.datetime | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if text.isdigit():
+        try:
+            timestamp = int(text)
+            if timestamp > 10_000_000_000:
+                timestamp = timestamp / 1000
+            return dt.datetime.fromtimestamp(timestamp, tz=tz or now_local().tzinfo)
+        except (OverflowError, OSError, ValueError):
+            pass
+    candidates = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%Y.%m.%d %H:%M:%S",
+        "%Y.%m.%d %H:%M",
+        "%Y.%m.%d",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d",
+    ]
+    for fmt in candidates:
+        try:
+            parsed = dt.datetime.strptime(text[: len(dt.datetime.now().strftime(fmt))], fmt)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=tz)
+            return parsed
+        except ValueError:
+            continue
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=tz)
+        return parsed
+    except ValueError:
+        return None
+
+
+def extract_mx_search_items(raw_file: str) -> list[dict[str, Any]]:
+    data = json.loads(Path(raw_file).read_text(encoding="utf-8"))
+    items = (
+        data.get("data", {})
+        .get("data", {})
+        .get("llmSearchResponse", {})
+        .get("data", [])
+    )
+    if not isinstance(items, list):
+        return []
+    extracted: list[dict[str, Any]] = []
+    for index, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            continue
+        extracted.append(
+            {
+                "index": index,
+                "code": item.get("code") or "",
+                "title": item.get("title") or "",
+                "content": item.get("content") or "",
+                "date": item.get("date") or "",
+                "source": item.get("insName") or item.get("source") or "",
+                "type": item.get("informationType") or "",
+                "entity": item.get("entityFullName") or "",
+                "url": item.get("jumpUrl") or "",
+                "raw_file": raw_file,
+            }
+        )
+    return extracted
+
+
+def classify_items(
+    *,
+    raw_files: list[str],
+    window_start: dt.datetime | None,
+    window_end: dt.datetime | None,
+) -> dict[str, Any]:
+    classified: list[dict[str, Any]] = []
+    counts = {
+        "in_window": 0,
+        "carryover": 0,
+        "future_or_clock_skew": 0,
+        "undated": 0,
+        "unwindowed": 0,
+    }
+    for raw_file in raw_files:
+        try:
+            items = extract_mx_search_items(raw_file)
+        except Exception as exc:  # noqa: BLE001 - keep collector resilient
+            classified.append(
+                {
+                    "bucket": "undated",
+                    "title": f"raw item extraction failed: {exc}",
+                    "date": "",
+                    "source": "",
+                    "type": "",
+                    "entity": "",
+                    "raw_file": raw_file,
+                }
+            )
+            counts["undated"] += 1
+            continue
+        for item in items:
+            parsed = parse_item_datetime(item.get("date"), window_end.tzinfo if window_end else None)
+            if not window_start or not window_end:
+                bucket = "unwindowed"
+            elif not parsed:
+                bucket = "undated"
+            elif window_start <= parsed <= window_end:
+                bucket = "in_window"
+            elif parsed < window_start:
+                bucket = "carryover"
+            else:
+                bucket = "future_or_clock_skew"
+            item["bucket"] = bucket
+            item["parsed_at"] = parsed.isoformat(timespec="seconds") if parsed else None
+            classified.append(item)
+            counts[bucket] += 1
+    return {"counts": counts, "items": classified}
+
+
+REPORT_SECTIONS: list[tuple[str, str, set[str]]] = [
+    ("1.", "今日市场总览", {"market_overview", "overnight_watch", "smoke_market"}),
+    ("2.", "高频主题/板块", {"industry_themes", "midday_topics", "daily_repeated_terms"}),
+    (
+        "3.",
+        "公司公告与事件",
+        {
+            "announcements",
+            "midday_announcements",
+            "after_close_announcements",
+            "tomorrow_calendar",
+        },
+    ),
+    ("4.", "研报/机构观点", {"research_views", "after_close_research"}),
+    ("5.", "政策与宏观信息", {"macro_policy", "global_china_assets"}),
+    ("6.", "异动股票/板块", {"midday_market", "close_review"}),
+    ("7.", "自选股相关信息", {"watchlist_related"}),
+    ("8.", "未归类信息", set()),
+]
+
+
+def entry_status(entry: dict[str, Any]) -> str:
+    if entry["returncode"] != 0:
+        return f"FAILED({entry['returncode']})"
+    if not entry["api_ok"]:
+        return "API_ERROR"
+    return "OK"
+
+
+def entry_counts(entry: dict[str, Any]) -> str:
+    counts = (entry.get("classification") or {}).get("counts") or {}
+    visible = [f"{key}={value}" for key, value in counts.items() if value]
+    return ", ".join(visible) if visible else "无可归类标题"
+
+
+def entry_items(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    return (entry.get("classification") or {}).get("items") or []
+
+
+def item_sort_key(item: dict[str, Any]) -> tuple[str, str]:
+    return (str(item.get("parsed_at") or item.get("date") or ""), str(item.get("title") or ""))
+
+
+def item_identity(item: dict[str, Any]) -> tuple[str, int, str, str]:
+    return (
+        str(item.get("raw_file") or ""),
+        int(item.get("index") or 0),
+        str(item.get("title") or ""),
+        str(item.get("date") or ""),
+    )
+
+
+def format_item_line(item: dict[str, Any]) -> str:
+    meta = []
+    if item.get("date"):
+        meta.append(str(item["date"]))
+    if item.get("type"):
+        meta.append(str(item["type"]))
+    if item.get("source"):
+        meta.append(str(item["source"]))
+    if item.get("entity"):
+        meta.append(str(item["entity"]))
+    bucket = item.get("bucket") or "unknown"
+    suffix = f" ({' | '.join(meta)})" if meta else ""
+    return f"- [{bucket}] {item.get('title') or '[无标题]'}{suffix}"
+
+
+def short_text(text: str, limit: int = 180) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1] + "..."
+
+
+def summary_sentence(item: dict[str, Any]) -> str:
+    title = " ".join(str(item.get("title") or "").split())
+    content = " ".join(str(item.get("content") or "").split())
+    if not content:
+        return title or "[无标题]"
+    if title and content.startswith(title):
+        base = content
+    elif title:
+        base = f"{title}：{content}"
+    else:
+        base = content
+    return short_text(base, 260)
+
+
+def build_report_items(
+    entries: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[tuple[str, int, str, str], str]]:
+    all_items: list[dict[str, Any]] = []
+    for entry in entries:
+        for item in entry_items(entry):
+            copied = dict(item)
+            copied["entry_id"] = entry["id"]
+            all_items.append(copied)
+    all_items.sort(key=item_sort_key)
+    serial_by_item: dict[tuple[str, int, str, str], str] = {}
+    for index, item in enumerate(all_items, 1):
+        item["serial"] = str(index)
+        serial_by_item[item_identity(item)] = item["serial"]
+    return all_items, serial_by_item
+
+
+def extract_json_object(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("OpenClaw summary did not contain a JSON object")
+    return json.loads(cleaned[start : end + 1])
+
+
+def build_openclaw_summary_prompt(
+    *,
+    phase_label: str,
+    window: dict[str, Any],
+    all_items: list[dict[str, Any]],
+    max_item_chars: int,
+) -> str:
+    section_titles = [title for _, title, _ in REPORT_SECTIONS]
+    payload_items = build_openclaw_payload_items(
+        all_items=all_items,
+        max_item_chars=max_item_chars,
+    )
+    return (
+        "你是市场信息浸泡日报的轻整理层。任务不是投研判断，也不是交易建议。\n"
+        "请基于原始消息，按栏目生成保持原意的轻度整理文本。\n"
+        "规则：\n"
+        "1. 只整理事实和消息含义，不预测涨跌，不给买卖建议。\n"
+        "2. 1-7栏目只输出轻整理后的中文文本、信源、原文编号；不要输出状态、时间归类、信息类型等工程字段。\n"
+        "3. 输入里的 date/source/title 只作为判断归类的证据；整理正文不要机械复述发布时间、来源名或标题。\n"
+        "4. 只有当时间是消息报道的事件时间、截止时间、会议时间、披露时间等内容本身的一部分时，才写入整理正文。\n"
+        "5. 不能归入前7个明确栏目的消息，放入“未归类信息”并同样轻整理；不要因为未归类就忽略。\n"
+        "6. 不要丢掉重要分歧和风险表述；遇到情绪化或观点化消息，要保留其观点属性，不把它写成事实。\n"
+        "7. 每条整理文本 40-120 个中文字符；可合并同主题多条消息，但 refs 必须列出对应原文编号。\n"
+        "8. 返回严格 JSON，不要 Markdown，不要代码块。\n"
+        "JSON 格式：\n"
+        '{"sections":{"今日市场总览":[{"text":"...","source":"...","refs":["1"]}],"未归类信息":[{"text":"...","source":"...","refs":["2"]}]},"observation":{"repeated_words":["..."],"multi_day_themes":["..."],"watch_next":["..."]}}\n'
+        f"阶段：{phase_label}\n"
+        f"窗口：{window.get('start') or '无'} 至 {window.get('end') or '无'}\n"
+        f"栏目：{json.dumps(section_titles, ensure_ascii=False)}\n"
+        "原始消息：\n"
+        f"{json.dumps(payload_items, ensure_ascii=False)}"
+    )
+
+
+def build_openclaw_payload_items(
+    *,
+    all_items: list[dict[str, Any]],
+    max_item_chars: int,
+) -> list[dict[str, Any]]:
+    payload_items = []
+    for item in all_items:
+        payload_items.append(
+            {
+                "serial": item.get("serial"),
+                "entry_id": item.get("entry_id"),
+                "title": item.get("title"),
+                "date": item.get("date"),
+                "source": item.get("source"),
+                "type": item.get("type"),
+                "bucket": item.get("bucket"),
+                "content": short_text(str(item.get("content") or ""), max_item_chars),
+            }
+        )
+    return payload_items
+
+
+def chunk_text(text: str, max_chars: int) -> list[str]:
+    if max_chars <= 0:
+        return [text]
+    return [text[i : i + max_chars] for i in range(0, len(text), max_chars)] or [""]
+
+
+def build_openclaw_chunked_messages(
+    *,
+    phase_label: str,
+    window: dict[str, Any],
+    all_items: list[dict[str, Any]],
+    max_item_chars: int,
+    chunk_chars: int,
+) -> list[str]:
+    section_titles = [title for _, title, _ in REPORT_SECTIONS]
+    payload_items = build_openclaw_payload_items(
+        all_items=all_items,
+        max_item_chars=max_item_chars,
+    )
+    payload_text = json.dumps(payload_items, ensure_ascii=False)
+    chunks = chunk_text(payload_text, chunk_chars)
+    messages = [
+        (
+            "你是市场信息浸泡日报的轻整理层。任务不是投研判断，也不是交易建议。\n"
+            "接下来我会分片发送原始消息 JSON。请先只确认已接收，不要生成日报。\n"
+            "最终要求：按栏目生成保持原意的轻整理文本；1-7只输出整理后的中文文本、信源、原文编号；"
+            "输入里的时间、来源、标题只作为证据，不要机械写进整理正文；"
+            "只有事件时间本身才可写入正文；不能归入前7栏的放入“未归类信息”；返回严格 JSON，不要 Markdown。\n"
+            'JSON格式：{"sections":{"今日市场总览":[{"text":"...","source":"...","refs":["1"]}],'
+            '"未归类信息":[{"text":"...","source":"...","refs":["2"]}]},"observation":'
+            '{"repeated_words":["..."],"multi_day_themes":["..."],"watch_next":["..."]}}\n'
+            f"阶段：{phase_label}\n"
+            f"窗口：{window.get('start') or '无'} 至 {window.get('end') or '无'}\n"
+            f"栏目：{json.dumps(section_titles, ensure_ascii=False)}\n"
+            f"原始消息总数：{len(payload_items)}，分片数：{len(chunks)}"
+        )
+    ]
+    for index, chunk in enumerate(chunks, 1):
+        messages.append(f"原始消息分片 {index}/{len(chunks)}：\n{chunk}")
+    messages.append(
+        "以上原始消息已经发送完毕。现在请根据全部分片生成最终 JSON。"
+        "只返回 JSON 对象，不要 Markdown，不要代码块。"
+    )
+    return messages
+
+
+def generate_openclaw_digest(
+    *,
+    config: dict[str, Any],
+    phase: str,
+    phase_label: str,
+    window: dict[str, Any],
+    all_items: list[dict[str, Any]],
+    run_slug: str,
+) -> dict[str, Any]:
+    summary_config = config.get("openclaw_summary") or {}
+    if not summary_config.get("enabled", False):
+        return {"enabled": False, "attempted": False}
+    if phase == "smoke" and not summary_config.get("summarize_smoke", False):
+        return {"enabled": True, "attempted": False, "reason": "smoke summary disabled"}
+    if not all_items:
+        return {"enabled": True, "attempted": False, "reason": "no items"}
+
+    openclaw_bin = Path(config.get("openclaw_bin") or "openclaw").expanduser()
+    prompt = build_openclaw_summary_prompt(
+        phase_label=phase_label,
+        window=window,
+        all_items=all_items,
+        max_item_chars=int(summary_config.get("max_item_chars") or 1200),
+    )
+    started = now_local().isoformat(timespec="seconds")
+    retries = int(summary_config.get("retries") or 3)
+    timeout = int(summary_config.get("timeout") or 300)
+    max_message_chars = int(summary_config.get("max_message_chars") or 60000)
+    last_error = ""
+    for attempt in range(1, retries + 1):
+        session_id = f"market-immersion-summary-{run_slug}-{attempt}"
+        base_cmd = [
+            str(openclaw_bin),
+            "agent",
+            "--local",
+            "--agent",
+            str(summary_config.get("agent") or "main"),
+            "--session-id",
+            session_id,
+            "--json",
+            "--thinking",
+            str(summary_config.get("thinking") or "low"),
+            "--timeout",
+            str(timeout),
+        ]
+        if len(prompt) <= max_message_chars:
+            messages = [prompt]
+        else:
+            messages = build_openclaw_chunked_messages(
+                phase_label=phase_label,
+                window=window,
+                all_items=all_items,
+                max_item_chars=int(summary_config.get("max_item_chars") or 1200),
+                chunk_chars=max_message_chars,
+            )
+        completed = None
+        for message in messages:
+            completed = subprocess.run(
+                [*base_cmd, "--message", message],
+                text=True,
+                capture_output=True,
+                timeout=timeout + 30,
+                check=False,
+            )
+            if completed.returncode != 0:
+                break
+        if completed is None:
+            last_error = "OpenClaw summary produced no turn"
+            time.sleep(5)
+            continue
+        if completed.returncode != 0:
+            last_error = completed.stderr[-2000:] or completed.stdout[-2000:]
+            time.sleep(5)
+            continue
+        try:
+            data = extract_json_object(completed.stdout)
+            text = "\n".join(
+                payload.get("text", "")
+                for payload in data.get("payloads", [])
+                if isinstance(payload, dict)
+            )
+            digest = extract_json_object(text)
+            return {
+                "enabled": True,
+                "attempted": True,
+                "started_at": started,
+                "attempts": attempt,
+                "sections": digest.get("sections") or {},
+                "observation": digest.get("observation") or {},
+                "usage": (data.get("meta") or {}).get("agentMeta", {}).get("usage"),
+            }
+        except Exception as exc:  # noqa: BLE001 - retry malformed model output
+            last_error = str(exc)
+            time.sleep(5)
+    return {
+        "enabled": True,
+        "attempted": True,
+        "started_at": started,
+        "attempts": retries,
+        "error": last_error or "OpenClaw summary failed",
+    }
+
+
+def append_section_digest(
+    lines: list[str],
+    entry: dict[str, Any],
+    serial_by_item: dict[tuple[str, int, str, str], str],
+) -> None:
+    items = sorted(entry_items(entry), key=item_sort_key)
+    if items:
+        for item in items:
+            serial = serial_by_item.get(item_identity(item), "#??")
+            source = str(item.get("source") or "未知来源")
+            lines.append(f"- {summary_sentence(item)}")
+            lines.append(f"  - 信源：{source}｜原文：{serial}")
+        lines.append("")
+    else:
+        lines.append("- 本轮暂无可整理信息。")
+        lines.append("")
+
+    if entry["api_messages"]:
+        lines.append("- API 提示：")
+        for message in entry["api_messages"]:
+            lines.append(f"  - `{message}`")
+        lines.append("")
+
+
+def append_ai_section_digest(
+    lines: list[str],
+    title: str,
+    openclaw_digest: dict[str, Any],
+) -> bool:
+    sections = openclaw_digest.get("sections") or {}
+    rows = sections.get(title) or []
+    if not rows:
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        text = " ".join(str(row.get("text") or "").split())
+        if not text:
+            continue
+        source = "、".join(str(x) for x in row.get("sources") or [] if x) or str(row.get("source") or "未知来源")
+        refs = "、".join(str(x) for x in row.get("refs") or [] if x) or "无"
+        lines.append(f"- {text}")
+        lines.append(f"  - 信源：{source}｜原文：{refs}")
+    lines.append("")
+    return True
+
+
+def append_raw_message_flow(lines: list[str], items: list[dict[str, Any]]) -> None:
+    lines.append("## 9. 原始消息流")
+    lines.append("")
+    lines.append("按发布时间顺序保留本次收录消息原文；这里是完整信息池，不做删减。")
+    lines.append("")
+    if not items:
+        lines.append("- 本轮暂无可解析原始消息。")
+        lines.append("")
+        return
+    for item in items:
+        lines.append(f"### {item['serial']} {item.get('title') or '[无标题]'}")
+        lines.append("")
+        lines.append(f"- 时间：{item.get('date') or '未知'}")
+        lines.append(f"- 来源：{item.get('source') or '未知'}")
+        lines.append(f"- 类型：{item.get('type') or '未知'}")
+        lines.append(f"- 时间归类：`{item.get('bucket') or 'unknown'}`")
+        if item.get("entity"):
+            lines.append(f"- 相关实体：{item['entity']}")
+        if item.get("url"):
+            lines.append(f"- 原始链接：{item['url']}")
+        lines.append(f"- 所属栏目查询：`{item.get('entry_id') or ''}`")
+        lines.append("")
+        lines.append("原始消息全文：")
+        lines.append("")
+        lines.append("```text")
+        lines.append(str(item.get("content") or "[无 content 字段]"))
+        lines.append("```")
+        lines.append("")
+
+
+def write_markdown_report(
+    *,
+    path: Path,
+    phase: str,
+    phase_label: str,
+    run_started: str,
+    window: dict[str, Any],
+    entries: list[dict[str, Any]],
+    manifest_path: Path,
+    all_items: list[dict[str, Any]],
+    serial_by_item: dict[tuple[str, int, str, str], str],
+    openclaw_digest: dict[str, Any],
+) -> None:
+    date_label = run_started[:10]
+    entries_by_id = {entry["id"]: entry for entry in entries}
+    total_items = sum(len(entry_items(entry)) for entry in entries)
+    total_counts = {
+        "in_window": 0,
+        "carryover": 0,
+        "undated": 0,
+        "future_or_clock_skew": 0,
+        "unwindowed": 0,
+    }
+    for entry in entries:
+        for key, value in ((entry.get("classification") or {}).get("counts") or {}).items():
+            if key in total_counts:
+                total_counts[key] += int(value or 0)
+    lines: list[str] = []
+    lines.append(f"# {date_label} 市场信息浸泡日志")
+    lines.append("")
+    lines.append(
+        f"> {phase_label}｜窗口：{window.get('start') or '无'} 至 {window.get('end') or '无'}｜"
+        f"收录标题：{total_items}｜窗口内：{total_counts['in_window']}｜"
+        f"延续：{total_counts['carryover']}｜无时间：{total_counts['undated']}"
+    )
+    lines.append("")
+
+    used_ids: set[str] = set()
+    for prefix, title, entry_ids in REPORT_SECTIONS:
+        lines.append(f"## {prefix} {title}")
+        lines.append("")
+        if append_ai_section_digest(lines, title, openclaw_digest):
+            continue
+        section_entries = [entries_by_id[entry_id] for entry_id in entry_ids if entry_id in entries_by_id]
+        if not section_entries:
+            lines.append("- 本轮暂无该栏目对应信息。")
+            lines.append("")
+            continue
+        for entry in section_entries:
+            used_ids.add(entry["id"])
+            append_section_digest(lines, entry, serial_by_item)
+
+    append_raw_message_flow(lines, all_items)
+
+    lines.append("## 观察备忘")
+    lines.append("")
+    lines.append("仅记录，不做交易建议：")
+    observation = openclaw_digest.get("observation") or {}
+    repeated_words = "、".join(str(x) for x in observation.get("repeated_words") or [] if x)
+    multi_day_themes = "、".join(str(x) for x in observation.get("multi_day_themes") or [] if x)
+    watch_next = "、".join(str(x) for x in observation.get("watch_next") or [] if x)
+    lines.append(f"- 今日反复出现的词：{repeated_words}")
+    lines.append(f"- 连续多日出现的主题：{multi_day_themes}")
+    lines.append(f"- 值得明天继续观察的线索：{watch_next}")
+    lines.append("")
+    lines.append("## 本机复盘索引")
+    lines.append("")
+    lines.append(f"- manifest: `{manifest_path}`")
+    lines.append(f"- window_source: `{window.get('source') or ''}`")
+    lines.append("- raw JSON / stdout / stderr 已保留在本机 market-immersion 归档目录。")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def notion_text(text: str) -> list[dict[str, Any]]:
+    text = str(text)
+    if not text:
+        text = " "
+    return [
+        {"type": "text", "text": {"content": text[i : i + 1900]}}
+        for i in range(0, len(text), 1900)
+    ]
+
+
+def notion_block(kind: str, text: str) -> dict[str, Any]:
+    if kind in {"heading_1", "heading_2", "heading_3", "paragraph", "quote", "bulleted_list_item"}:
+        return {
+            "object": "block",
+            "type": kind,
+            kind: {"rich_text": notion_text(text)},
+        }
+    if kind == "code":
+        return {
+            "object": "block",
+            "type": "code",
+            "code": {"rich_text": notion_text(text), "language": "plain text"},
+        }
+    raise ValueError(f"Unsupported Notion block kind: {kind}")
+
+
+def markdown_to_notion_blocks(markdown: str) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    code_lines: list[str] | None = None
+    for line in markdown.splitlines():
+        if line.startswith("```"):
+            if code_lines is None:
+                code_lines = []
+            else:
+                code_text = "\n".join(code_lines) or " "
+                for i in range(0, len(code_text), 18000):
+                    blocks.append(notion_block("code", code_text[i : i + 18000]))
+                code_lines = None
+            continue
+        if code_lines is not None:
+            code_lines.append(line)
+            continue
+        if not line.strip():
+            continue
+        if line.startswith("# "):
+            blocks.append(notion_block("heading_1", line[2:].strip()))
+        elif line.startswith("## "):
+            blocks.append(notion_block("heading_2", line[3:].strip()))
+        elif line.startswith("### "):
+            blocks.append(notion_block("heading_3", line[4:].strip()))
+        elif line.startswith("#### "):
+            blocks.append(notion_block("heading_3", line[5:].strip()))
+        elif line.startswith("> "):
+            blocks.append(notion_block("quote", line[2:].strip()))
+        elif line.startswith("- "):
+            blocks.append(notion_block("bulleted_list_item", line[2:].strip()))
+        else:
+            blocks.append(notion_block("paragraph", line.strip()))
+    if code_lines is not None:
+        code_text = "\n".join(code_lines) or " "
+        for i in range(0, len(code_text), 18000):
+            blocks.append(notion_block("code", code_text[i : i + 18000]))
+    return blocks
+
+
+def notion_request(
+    *,
+    method: str,
+    url: str,
+    token: str,
+    payload: dict[str, Any],
+    timeout: int,
+) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Notion API {exc.code}: {details}") from exc
+
+
+def publish_notion_page(
+    *,
+    config: dict[str, Any],
+    env: dict[str, str],
+    phase: str,
+    phase_label: str,
+    report_path: Path,
+) -> dict[str, Any]:
+    notion = config.get("notion") or {}
+    if not notion.get("enabled"):
+        return {"enabled": False, "attempted": False}
+    if phase == "smoke" and not notion.get("publish_smoke", False):
+        return {"enabled": True, "attempted": False, "reason": "smoke publish disabled"}
+
+    token_env = str(notion.get("token_env") or "NOTION_TOKEN")
+    parent_env = str(notion.get("parent_page_id_env") or "NOTION_PARENT_PAGE_ID")
+    token = env.get(token_env, "").strip()
+    parent_page_id = str(notion.get("parent_page_id") or env.get(parent_env) or "").strip()
+    if not token:
+        return {"enabled": True, "attempted": False, "reason": f"missing {token_env}"}
+    if not parent_page_id:
+        return {"enabled": True, "attempted": False, "reason": f"missing {parent_env}"}
+
+    title = report_path.stem.replace("_", " ") + f" - {phase_label}"
+    markdown = report_path.read_text(encoding="utf-8")
+    blocks = markdown_to_notion_blocks(markdown)
+    timeout = int(notion.get("timeout") or 120)
+    started = now_local().isoformat(timespec="seconds")
+
+    try:
+        page = notion_request(
+            method="POST",
+            url="https://api.notion.com/v1/pages",
+            token=token,
+            timeout=timeout,
+            payload={
+                "parent": {"type": "page_id", "page_id": parent_page_id},
+                "properties": {
+                    "title": {"title": [{"type": "text", "text": {"content": title}}]}
+                },
+                "children": blocks[:80],
+            },
+        )
+        page_id = page["id"]
+        for i in range(80, len(blocks), 80):
+            notion_request(
+                method="PATCH",
+                url=f"https://api.notion.com/v1/blocks/{page_id}/children",
+                token=token,
+                timeout=timeout,
+                payload={"children": blocks[i : i + 80]},
+            )
+        return {
+            "enabled": True,
+            "attempted": True,
+            "started_at": started,
+            "page_id": page_id,
+            "url": page.get("url"),
+            "block_count": len(blocks),
+        }
+    except Exception as exc:  # noqa: BLE001 - Notion delivery should not break collection
+        return {
+            "enabled": True,
+            "attempted": True,
+            "started_at": started,
+            "error": str(exc),
+        }
+
+
+def deliver_report(
+    *,
+    config: dict[str, Any],
+    phase: str,
+    phase_label: str,
+    report_path: Path,
+    manifest_path: Path,
+    notion_url: str | None = None,
+) -> dict[str, Any]:
+    telegram = config.get("telegram") or {}
+    if not telegram.get("enabled"):
+        return {"enabled": False, "attempted": False}
+    if phase == "smoke" and not telegram.get("send_smoke", False):
+        return {"enabled": True, "attempted": False, "reason": "smoke delivery disabled"}
+
+    target = str(telegram.get("target") or "").strip()
+    if not target:
+        return {"enabled": True, "attempted": False, "reason": "missing telegram target"}
+
+    openclaw_bin = Path(config.get("openclaw_bin") or "openclaw").expanduser()
+    message = (
+        f"市场信息浸泡日志：{phase_label}\n"
+        f"{'Notion 日报：' + notion_url if notion_url else '完整 Markdown 日报已附上。'}\n"
+        f"manifest: {manifest_path}"
+    )
+    cmd = [
+        str(openclaw_bin),
+        "message",
+        "send",
+        "--channel",
+        str(telegram.get("channel") or "telegram"),
+        "--target",
+        target,
+        "--message",
+        message,
+        "--media",
+        str(report_path),
+        "--force-document",
+    ]
+    account = str(telegram.get("account") or "").strip()
+    if account:
+        cmd.extend(["--account", account])
+
+    started = now_local().isoformat(timespec="seconds")
+    try:
+        completed = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            timeout=int(telegram.get("timeout") or 120),
+            check=False,
+        )
+        return {
+            "enabled": True,
+            "attempted": True,
+            "started_at": started,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+        }
+    except Exception as exc:  # noqa: BLE001 - delivery is best effort
+        return {
+            "enabled": True,
+            "attempted": True,
+            "started_at": started,
+            "exception": str(exc),
+        }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="config/market_immersion_config.json")
+    parser.add_argument("--phase", default="morning")
+    parser.add_argument("--timeout", type=int, default=90)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    script_dir = Path(__file__).resolve().parent
+    module_dir = script_dir.parent
+    config_path = (module_dir / args.config).resolve()
+    config = load_json(config_path)
+
+    workspace = Path(config["workspace_dir"]).expanduser()
+    output_root = Path(config["output_dir"]).expanduser()
+    venv_python = Path(config["venv_python"]).expanduser()
+    secrets_env = Path(config["secrets_env"]).expanduser()
+    notion_secrets_env = Path(
+        (config.get("notion") or {}).get("secrets_env")
+        or "~/.openclaw/secrets/notion.env"
+    ).expanduser()
+    run_def = config["runs"].get(args.phase)
+    if not run_def:
+        raise SystemExit(f"Unknown phase: {args.phase}")
+
+    env = os.environ.copy()
+    env.update(load_env_file(secrets_env))
+    env.update(load_env_file(notion_secrets_env))
+    if not env.get("MX_APIKEY"):
+        raise SystemExit("MX_APIKEY is not available. Check ~/.openclaw/secrets/mx.env")
+
+    started = now_local()
+    started_iso = started.isoformat(timespec="seconds")
+    window_start, window_end, window_source = compute_window(
+        phase=args.phase,
+        output_root=output_root,
+        end=started,
+    )
+    window_prefix = format_window_for_query(window_start, window_end)
+    window = {
+        "start": window_start.isoformat(timespec="seconds") if window_start else None,
+        "end": window_end.isoformat(timespec="seconds") if window_end else None,
+        "source": window_source,
+    }
+    day = started.strftime("%Y-%m-%d")
+    stamp = started.strftime("%Y%m%d_%H%M%S")
+    run_slug = f"{stamp}_{args.phase}"
+
+    daily_dir = output_root / "daily" / day
+    raw_dir = daily_dir / "raw"
+    stdout_dir = daily_dir / "stdout"
+    skill_output_dir = daily_dir / "skill-output" / run_slug
+    for d in (daily_dir, raw_dir, stdout_dir, skill_output_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    entries: list[dict[str, Any]] = []
+    feed_entry = collect_eastmoney_feed_entry(
+        config=config,
+        output_dir=skill_output_dir,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    if feed_entry:
+        entries.append(feed_entry)
+
+    mx_supplement = config.get("mx_search_supplement") or {}
+    run_mx_queries = bool(mx_supplement.get("enabled", False)) or (
+        args.phase == "smoke" and bool(mx_supplement.get("enabled_for_smoke", True))
+    )
+    for query_def in (run_def["queries"] if run_mx_queries else []):
+        query_id = query_def["id"]
+        skill = query_def["skill"]
+        base_query = query_def["query"]
+        query = f"{window_prefix}{base_query}" if window_prefix else base_query
+        entry_slug = safe_name(f"{run_slug}_{query_id}")
+        stdout_path = stdout_dir / f"{entry_slug}.stdout.txt"
+        stderr_path = stdout_dir / f"{entry_slug}.stderr.txt"
+
+        before_files = {
+            p: p.stat().st_mtime_ns
+            for p in skill_output_dir.glob("*")
+            if p.is_file()
+        }
+        t0 = time.time()
+        if args.dry_run:
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=f"DRY RUN: {skill} {shlex.quote(query)}\n",
+                stderr="",
+            )
+        else:
+            completed = run_skill(
+                workspace=workspace,
+                venv_python=venv_python,
+                skill=skill,
+                query=query,
+                output_dir=skill_output_dir,
+                env=env,
+                timeout=args.timeout,
+            )
+        duration_ms = int((time.time() - t0) * 1000)
+        stdout_path.write_text(completed.stdout or "", encoding="utf-8")
+        stderr_path.write_text(completed.stderr or "", encoding="utf-8")
+
+        after_files = [p for p in skill_output_dir.glob("*") if p.is_file()]
+        raw_files = sorted(
+            str(p)
+            for p in after_files
+            if p.suffix == ".json" and before_files.get(p) != p.stat().st_mtime_ns
+        )
+        api_ok, api_messages = inspect_api_files(raw_files)
+        classification = classify_items(
+            raw_files=raw_files,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        entries.append(
+            {
+                "id": query_id,
+                "skill": skill,
+                "base_query": base_query,
+                "query": query,
+                "returncode": completed.returncode,
+                "api_ok": api_ok,
+                "api_messages": api_messages,
+                "classification": classification,
+                "duration_ms": duration_ms,
+                "stdout": completed.stdout or "",
+                "stderr": completed.stderr or "",
+                "stdout_file": str(stdout_path),
+                "stderr_file": str(stderr_path),
+                "raw_files": raw_files,
+            }
+        )
+
+    all_items, serial_by_item = build_report_items(entries)
+    openclaw_digest = generate_openclaw_digest(
+        config=config,
+        phase=args.phase,
+        phase_label=run_def["label"],
+        window=window,
+        all_items=all_items,
+        run_slug=run_slug,
+    )
+
+    manifest = {
+        "version": 1,
+        "phase": args.phase,
+        "phase_label": run_def["label"],
+        "started_at": started_iso,
+        "window": window,
+        "config_path": str(config_path),
+        "entries": entries,
+        "openclaw_summary": openclaw_digest,
+    }
+    manifest_path = daily_dir / f"{run_slug}.manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    summary_config = config.get("openclaw_summary") or {}
+    summary_required = bool(summary_config.get("required", True))
+    if (
+        summary_required
+        and all_items
+        and (
+            openclaw_digest.get("error")
+            or not (openclaw_digest.get("sections") or {})
+        )
+    ):
+        print(f"openclaw_summary_failed={openclaw_digest.get('error') or 'empty sections'}", file=sys.stderr)
+        print(f"manifest={manifest_path}")
+        return 4
+
+    report_path = daily_dir / f"{run_slug}.md"
+    write_markdown_report(
+        path=report_path,
+        phase=args.phase,
+        phase_label=run_def["label"],
+        run_started=started_iso,
+        window=window,
+        entries=entries,
+        manifest_path=manifest_path,
+        all_items=all_items,
+        serial_by_item=serial_by_item,
+        openclaw_digest=openclaw_digest,
+    )
+
+    latest_path = output_root / "latest.md"
+    latest_path.parent.mkdir(parents=True, exist_ok=True)
+    latest_path.write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    notion_delivery = publish_notion_page(
+        config=config,
+        env=env,
+        phase=args.phase,
+        phase_label=run_def["label"],
+        report_path=report_path,
+    )
+    delivery = deliver_report(
+        config=config,
+        phase=args.phase,
+        phase_label=run_def["label"],
+        report_path=report_path,
+        manifest_path=manifest_path,
+        notion_url=notion_delivery.get("url"),
+    )
+    manifest["notion"] = notion_delivery
+    manifest["delivery"] = delivery
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"report={report_path}")
+    print(f"manifest={manifest_path}")
+    print(f"entries={len(entries)}")
+    if delivery.get("attempted"):
+        print(f"delivery_returncode={delivery.get('returncode', 'exception')}")
+    failures = [e for e in entries if e["returncode"] != 0]
+    api_failures = [e for e in entries if not e["api_ok"]]
+    if failures:
+        print(f"failures={len(failures)}", file=sys.stderr)
+        return 2
+    if api_failures:
+        print(f"api_failures={len(api_failures)}", file=sys.stderr)
+        return 3
+    notion_config = config.get("notion") or {}
+    if args.phase != "smoke" and notion_config.get("enabled"):
+        if not notion_delivery.get("attempted") or notion_delivery.get("error"):
+            print(
+                f"notion_publish_failed={notion_delivery.get('error') or notion_delivery.get('reason') or 'not attempted'}",
+                file=sys.stderr,
+            )
+            return 6
+    if args.phase != "smoke":
+        state_path = output_root / "state.json"
+        state_path.write_text(
+            json.dumps(
+                {
+                    "last_success_at": started_iso,
+                    "last_success_phase": args.phase,
+                    "last_success_report": str(report_path),
+                    "last_success_manifest": str(manifest_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

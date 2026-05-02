@@ -1,6 +1,6 @@
 ---
 name: openclaw-telegram-wsl-setup
-description: "A safe, transparent, simple OpenClaw guide and WSL toolkit for Windows. Use when the user wants to install, run, repair, monitor, or understand OpenClaw on Windows through WSL2; needs gateway readiness checks, keepalive/autostart, local OpenClaw Monitor panel installation, IMA OpenAPI skill setup for Tencent ima knowledge bases, long-offline network recovery, stale socket or polling recovery after internet loss, Telegram bot setup/repair, safe token entry, proxy-aware connectivity, pairing approval, channel startup verification, or diagnosis of messages that are not received, not answered, delayed, or only work while WSL is awake."
+description: "A safe, transparent, simple OpenClaw guide and WSL toolkit for Windows. Use when the user wants to install, run, repair, monitor, or understand OpenClaw on Windows through WSL2; needs gateway readiness checks, keepalive/autostart, local OpenClaw Monitor panel installation, optional market information immersion module setup, IMA OpenAPI skill setup for Tencent ima knowledge bases, long-offline network recovery, stale socket or polling recovery after internet loss, Telegram bot setup/repair, safe token entry, proxy-aware connectivity, pairing approval, channel startup verification, or diagnosis of messages that are not received, not answered, delayed, or only work while WSL is awake."
 ---
 
 # OpenClaw 养虾指南（WSL Toolkit）
@@ -226,7 +226,13 @@ Codex may be able to infer and run the right install commands from the current e
    - Explain its backend-work meaning: the "后台任务" count should come from `queued/running` tasks, active/blocked/cancel-requested TaskFlow pressure, and clearly labeled local daemon/workspace artifact heartbeat. Recent Telegram/session activity is only context and must not be presented as a running background task by itself.
    - Verify the control center opens without auto-starting OpenClaw, can explicitly start and stop OpenClaw with the power button, can open browser Control without manual gateway-token entry after the gateway is running, and can be minimized/closed to the system tray.
 
-12. If the user wants optional API enhancements, offer Jina embeddings and Tavily web search from `tools/openclaw-optional-apis`.
+12. If the user wants an automated market information immersion daily report, offer the optional `modules/openclaw-market-immersion` job module.
+   - Treat it as an opt-in OpenClaw job module, not base OpenClaw infrastructure and not a skill that should be installed by default.
+   - Make the user choose whether to install the module, whether to enable Notion publishing, whether to enable Telegram notifications, and whether to enable systemd timers.
+   - Never ask the user to paste MX, Notion, Telegram, model, or provider keys into chat. Use local terminal prompts or provider UI only.
+   - Explain that scheduling is handled by WSL `systemd --user` timers calling the module; the module then calls OpenClaw for整理. It is not OpenClaw's built-in scheduler.
+
+13. If the user wants optional API enhancements, offer Jina embeddings and Tavily web search from `tools/openclaw-optional-apis`.
    - Treat both as opt-in enhancements, not required OpenClaw infrastructure.
    - Jina is for `memorySearch` embeddings and semantic memory recall. It is not internet search.
    - Tavily is for OpenClaw `web_search` / periodic internet absorption. It is not memory embedding.
@@ -235,7 +241,7 @@ Codex may be able to infer and run the right install commands from the current e
    - Configure OpenClaw API keys as real env SecretRef objects using `openclaw config set ... --ref-provider default --ref-source env --ref-id ...`. Do not leave `env:JINA_API_KEY` as a raw string; OpenClaw may send that literal string as the API key and get false 401 errors.
    - Restart the gateway only after the user agrees, because it can briefly interrupt Telegram and channel startup.
 
-13. If the user wants local audio recognition through Doubao/Volcengine, install or verify the helper in `tools/openclaw-doubao-asr`.
+14. If the user wants local audio recognition through Doubao/Volcengine, install or verify the helper in `tools/openclaw-doubao-asr`.
    - Treat this as a separate ASR adapter, not as model routing.
    - Doubao text models can analyze transcripts; Ark chat models should not be described as native local-audio listeners unless the current provider docs prove that exact audio path works.
    - The Volcengine recording-file ASR path needs a speech resource in addition to the general API key. Flash mode normally uses `volc.bigasr.auc_turbo`; standard mode normally uses `volc.seedasr.auc`.
@@ -243,12 +249,12 @@ Codex may be able to infer and run the right install commands from the current e
    - The helper may run `openclaw-doubao-asr --self-check` without uploading audio.
    - Before transcribing a real local audio file, confirm with the user that the selected audio will be uploaded to Volcengine.
 
-14. Configure Telegram using a local token prompt or token file.
+15. Configure Telegram using a local token prompt or token file.
    - Guide the user through BotFather in Telegram if they do not already have a bot.
    - Token entry happens only in the local terminal prompt, never in chat.
    - Close token-entry windows after `openclaw channels status --json --timeout 30000` shows the token/config is available, unless the window is also the active gateway/keepalive path.
 
-15. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
+16. Restart gateway once, wait for channel startup, approve pairing if needed, and verify a fresh Telegram message receives a reply.
    - Explain the 60-120 second startup window.
    - Ask for a fresh message only after Telegram is ready or the startup grace period has passed.
    - Close successful setup windows after end-to-end Telegram reply verification, leaving only intentional hidden/minimized keepalive infrastructure.
@@ -894,6 +900,132 @@ Gateway URL: ws://127.0.0.1:18789
 ```
 
 If the monitor shows no backend task while OpenClaw recently replied in Telegram, explain that these are different signals: queued/running tasks and TaskFlow are authoritative for registered work; local daemon/artifact heartbeat is evidence of local productive work; Telegram/session recency alone is only activity context.
+
+## Optional Market Immersion Module
+
+Use this section only when the user explicitly wants OpenClaw to run a long-term market information immersion workflow, market daily report, scheduled 7x24 financial-news collection, or Notion-published market briefing. This is an optional `openclaw-job-module`, not base OpenClaw infrastructure and not a normal Codex skill install.
+
+The bundled module lives at:
+
+```text
+modules/openclaw-market-immersion/
+```
+
+User choice checkpoints:
+
+- Ask whether to install the module files into the OpenClaw workspace.
+- Ask whether to use the MiaoXiang/MX finance skills and verify `MX_APIKEY` locally.
+- Ask whether to enable Notion publishing. If yes, guide the user to create a Notion internal connection, grant page access, and enter the token locally. Do not ask for the token in chat.
+- Ask whether this market immersion module should send its report link or report file to Telegram. This is separate from the base OpenClaw Telegram channel: the normal Telegram bot may stay enabled even if market-report Telegram push is disabled.
+- Ask whether to enable the WSL `systemd --user` timers.
+- Run a smoke test first. Do not run a formal publishing job manually unless the user explicitly asks or the scheduled timer triggers it.
+
+User-operation and window rules:
+
+- For every browser, Notion, provider-console, PowerShell, Ubuntu, token prompt, or setup window opened during this module setup, track its lifecycle explicitly: active user input, waiting for verification, success and ready to close, stale/failed and ready to close, or intentional background infrastructure.
+- Decide whether the user's action succeeded by verifying local state, command output, service status, provider-page state, or a requested screenshot. Do not make the user judge success from ambiguous UI alone.
+- Close successful, stale, failed, duplicate, or no-longer-needed windows directly whenever the available tools can control them. Only ask the user to close a window when it is outside tool control; in that case, identify the exact window and why it can be closed.
+- If the user must complete a provider UI action, describe what success looks like before they act, then verify the result yourself from commands, provider state, or screenshot before moving on.
+- If the next step depends on a screenshot, explicitly ask the user for a screenshot and say which part of the window must be visible. Do not assume the user knows when a screenshot is needed.
+- If a window is stale, failed, or no longer needed, preserve any useful error text, close it directly when possible, and continue from the active path.
+- Never leave token-entry, Notion integration, or helper windows open just because setup succeeded. Close them after local verification unless they are the active long-running keepalive path.
+
+Key handling rules:
+
+- Store MX credentials in `~/.openclaw/secrets/mx.env`.
+- Store Notion credentials in `~/.openclaw/secrets/notion.env`.
+- Keep secret files mode `0600`.
+- Never print, log, screenshot, commit, or chat-paste secret values.
+- If a secret is exposed in chat, logs, screenshots, or command history, recommend rotating it.
+
+Architecture to explain to the user:
+
+- The module is installed as files under the OpenClaw workspace.
+- Scheduling is handled by WSL `systemd --user` timers.
+- Each timer calls `scripts/run_market_immersion.sh`.
+- The script collects source feeds, deduplicates them, validates that the requested time window is complete, then calls OpenClaw to do the lightweight整理.
+- Notion publishing happens only after source collection and OpenClaw整理 succeed.
+- This is not OpenClaw's own built-in scheduler. It is a reliable host timer that invokes OpenClaw as the processing layer.
+
+Default report sections:
+
+```text
+1. 今日市场总览
+2. 高频主题/板块
+3. 公司公告与事件
+4. 研报/机构观点
+5. 政策与宏观信息
+6. 异动股票/板块
+7. 自选股相关信息
+8. 未归类信息
+9. 原始消息流
+观察备忘
+```
+
+Report rules:
+
+- Sections 1-8 contain lightly organized text, source names, and raw-message references. They should preserve meaning, not paste long excerpts.
+- Do not mechanically include message publish time, title, or source inside整理正文. Include time only when the reported event time is itself part of the information.
+- Section 9 keeps the chronological raw message flow with source, publish time, title, type, URL when available, and full original content.
+- If the source pool is non-empty but OpenClaw整理 fails or returns empty organized sections, treat the run as failed and do not publish it as a successful report.
+- Formal runs should require complete feed windows. If a source errors or pagination cannot reach the beginning of the requested window, fail the run so the timer can retry instead of silently publishing an incomplete report.
+
+Default time windows:
+
+```text
+09:05 morning: previous day 22:10 -> current run time
+12:15 midday: same day 09:05 -> current run time
+15:20 close: same day 12:15 -> current run time
+22:10 night: same day 15:20 -> current run time
+```
+
+If `last_success_at` exists and is earlier than the scheduled end time, use it as the next run's start boundary to avoid gaps. Avoid casual manual formal runs at odd times because they can split the next scheduled window.
+
+Timer reliability expectations:
+
+- Use `Persistent=yes` on timers so missed runs fire after WSL starts again.
+- Enable user linger when appropriate so user services can run without an interactive WSL shell.
+- Use a Windows Startup keepalive only after explaining that it starts WSL after Windows login.
+- For network outages, use service retry (`Restart=on-failure`, a short `RestartSec`, and no tight start limit). This is retry-on-failure behavior, not a literal network-restored event hook.
+- Explain honestly that if Windows is fully powered off, the missed timer runs after Windows login starts WSL; it cannot run while the machine is off.
+
+Installation outline:
+
+```bash
+mkdir -p "$HOME/.openclaw/workspace"
+cp -a /path/to/modules/openclaw-market-immersion "$HOME/.openclaw/workspace/market-immersion-module"
+chmod +x "$HOME/.openclaw/workspace/market-immersion-module/scripts/"*.sh
+python3 -m compileall "$HOME/.openclaw/workspace/market-immersion-module/scripts"
+python3 -m json.tool "$HOME/.openclaw/workspace/market-immersion-module/config/market_immersion_config.json" >/dev/null
+```
+
+Use the module's local prompts for secrets when available:
+
+```bash
+"$HOME/.openclaw/workspace/market-immersion-module/scripts/set_notion_token.sh"
+```
+
+Install timers only after the user opts in:
+
+```bash
+mkdir -p "$HOME/.config/systemd/user"
+cp "$HOME/.openclaw/workspace/market-immersion-module/systemd/"* "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable --now openclaw-market-immersion.timer
+systemctl --user enable --now openclaw-market-immersion-midday.timer
+systemctl --user enable --now openclaw-market-immersion-close.timer
+systemctl --user enable --now openclaw-market-immersion-night.timer
+```
+
+Verification:
+
+```bash
+systemctl --user list-timers 'openclaw-market-immersion*'
+systemctl --user status openclaw-market-immersion.timer --no-pager
+"$HOME/.openclaw/workspace/market-immersion-module/scripts/run_market_immersion.sh" --phase smoke --no-publish
+```
+
+If the smoke test cannot query sources because of network, proxy, API, or provider changes, report that plainly and do not claim the scheduled daily report is production-ready.
 
 ## Optional API Enhancements
 
