@@ -4,39 +4,36 @@
   <img src="openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/OpenClawMonitorIcon.png" alt="OpenClaw cute red mascot" width="120">
 </p>
 
-这是我整理给自己和其他 OpenClaw 用户的一套 Windows/WSL 使用笔记和 Codex skill。
+这是一份给 Windows 用户准备的 OpenClaw 使用笔记，也是一套可以装进 Codex 的 skill。
 
-它主要解决一类很烦的问题：OpenClaw 本身能跑，但一接上 Telegram、长期挂后台、电脑重启、WSL 休眠、断网恢复、代理切换、模型认证之后，就开始变得不稳定。很多时候表面现象只是“机器人不回消息”，真正的问题却藏在 gateway、systemd、WSL、token、模型或网络恢复里面。
+我把它叫“养虾指南”，是因为 OpenClaw 真正麻烦的地方往往不是“能不能跑起来”，而是跑起来以后能不能稳定地待在后台：电脑重启以后还在不在，WSL 休眠以后能不能恢复，断网回来以后 Telegram 机器人还回不回消息，代理一切换会不会又把 gateway 搞挂。
 
-所以这个项目不是一个万能安装器，也不是官方文档替代品。它更像一份“养虾指南”：把我认为比较稳的 Windows + WSL2 路线、常见故障判断顺序、后台常驻方案、断网恢复方案、本机监控面板，都放在一个地方。
+这个仓库想解决的就是这些日常问题。它不假装自己是官方文档，也不把所有事包装成一个一键魔法按钮。它更像一份经过踩坑整理出来的路线图：推荐怎么装、先查哪一层、哪些东西要常驻、哪些东西不能乱动、出了问题怎么判断。
 
-我希望它做到三件事：
+我希望它始终坚持三件事：
 
-- 不把 token、API key、auth profile、日志这类东西塞进仓库或聊天记录。
-- 每一步尽量能检查、能解释，不靠“重启试试”碰运气。
-- 尽量少让用户手工重复配置。该常驻的常驻，该监控的监控，该写进 skill 的就写进 skill。
+- **安全**：token、API key、auth profile 和日志不进仓库，也不应该被贴进聊天。
+- **透明**：每一步都尽量能解释清楚，少一点“重启试试”的玄学。
+- **简单**：能自动恢复的就自动恢复，能放进控制中心看的就别让用户反复敲命令。
 
-项目最开始只是为了修 OpenClaw + Telegram + WSL2。后来补上了 keepalive、断网恢复、Token/后台任务监控和一个 Windows 本机小面板，所以现在名字也从单纯的 Telegram setup 扩成了 WSL toolkit。
+它最开始只是为了解决 OpenClaw + Telegram + WSL2 的稳定性问题。后来慢慢补上了 keepalive、断网恢复、本机控制中心、Token/成本流向、语音识别辅助工具和一些可选 API 配置，所以现在更像一个完整的 Windows/WSL 工具包。
 
 ## 这个项目解决什么问题
 
-很多 OpenClaw + Telegram 的问题表面上看是“机器人不回消息”，但真正的原因可能在更底层：
+很多时候用户看到的只是“机器人不回消息”。但真正的问题可能在 WSL、gateway、Telegram channel、模型认证、代理、断网恢复，甚至只是 OpenClaw 还没冷启动完。
 
-- WSL2 或 Ubuntu 没有正确准备好。
-- OpenClaw 只装在 Windows 原生环境里，而 gateway 实际需要更稳定的 Linux/WSL 运行环境。
-- `openclaw-gateway.service` 没有启动，或者只是监听端口但没有真正响应。
-- Windows 关机、重启或 WSL 自动休眠后，OpenClaw 没有自动恢复。
-- 电脑长时间断网后，OpenClaw 进程还活着，但 Telegram polling、provider socket 或 HTTP transport 进入半死状态，恢复网络后仍然不行动。
-- 网络或代理短暂抖动后，过于敏感的 watchdog 反复重启 gateway，导致 Telegram 能回复但明显延迟。
-- 模型没有选好、认证没通、额度不够，导致 OpenClaw 本地就不能稳定回复。
-- Telegram bot token 配好了，但 channel 没有启动、没有 pairing、没有权限，或者模型侧没有完成回复。
-- 用户没有明确确认 OpenClaw 可以看到哪些文件、能执行哪些操作。
+这份指南的处理顺序很朴素：
 
-这个 skill 的核心思路是：**先判断 OpenClaw 本地运行链路是否健康，再处理 Telegram 配置，最后做端到端消息验证。**
+1. 先确认 OpenClaw 本地能不能稳定运行。
+2. 再确认 gateway 和后台常驻是否可靠。
+3. 然后检查 Telegram 是否真正连接。
+4. 最后才看 bot token、模型回复、上下文和具体任务。
+
+这样做的好处是，遇到问题时不会一上来就重配 token、换模型、重装 OpenClaw，而是先判断到底是哪一层坏了。
 
 ## 推荐安装路径
 
-本 skill 默认推荐：
+我默认推荐这条路：
 
 ```text
 Windows
@@ -52,30 +49,21 @@ Windows
   -> Telegram Bot
 ```
 
-之所以推荐 Ubuntu on WSL2，而不是 Windows 原生安装，是因为 Telegram bot 需要一个长期在线的 gateway。WSL2 + Ubuntu 更接近 Linux 服务环境，systemd 用户服务、路径、权限、后台常驻和代理行为都更容易稳定下来。
+推荐 Ubuntu on WSL2，不是因为它看起来更酷，而是因为 OpenClaw gateway 更像一个需要长期在线的后台服务。放在 Ubuntu 里，systemd、路径、权限、后台常驻和恢复逻辑都更容易讲清楚，也更容易排查。
 
-## 主要能力
+## 它能做什么
 
-- 安装前先选择中文或英文，并用对应语言解释流程。
-- 解释 Windows 原生安装和 WSL2 安装的区别。
-- 默认使用 Ubuntu on WSL2，减少用户在发行版选择上的困惑。
-- 自动判断当前机器处于哪个状态：未装 WSL、Ubuntu 不完整、OpenClaw 缺失、gateway 不通、keepalive 缺失、Telegram 未配置、Telegram 能收到但不回复等。
-- 指导安装或修复 OpenClaw gateway。
-- 将 keepalive 作为基础设施处理，让 OpenClaw 在 Windows 登录后自动恢复。
-- 将长时间断网恢复作为基础设施处理：连续失败后才确认 offline，网络从确认 offline 变回 online 时自动重建 gateway，清理 stale socket / polling stall。
-- 为 network recovery watchdog 加防抖和冷却：单次网络探测失败或单次 gateway 探测失败只记录，不立刻重启，避免 watchdog 自己制造回复延迟。
-- 在 watchdog 内用本地 HTTP 仪表盘端口检查 gateway 健康，不在 systemd timer 环境里调用 `openclaw gateway probe`，避免 CLI 环境差异造成误判。
-- 为 gateway 启动加入宽限期：OpenClaw 启动、补装 bundled runtime dependencies、启动 channels/sidecars 时，watchdog 不应因为 HTTP 探测暂时失败而重启 gateway。
-- 安装本机 OpenClaw 控制中心，用 Windows 原生小程序启动 OpenClaw、显示 gateway、Telegram、后台任务、TaskFlow、本地 daemon/产物心跳、Token/上下文流向、本地记录成本、最近会话和日志提醒，并支持系统托盘常驻。
-- 控制中心可选提供 `Clash 安全模式`：针对为了 OpenClaw/Codex/国外大模型而开启 Clash Verge TUN 或全局式路由后，微信、腾讯服务、国内链接打不开的情况，让大模型流量跟随 `GLOBAL` 节点，同时让国内应用继续按规则直连；如果没有使用全局/TUN，或国内应用本来正常，一般不需要开启。
-- 可选配置 Jina embeddings 和 Tavily web search：Jina 用于 `memorySearch` 语义记忆，Tavily 用于 `web_search` / 定期吸收互联网资料；这两项都不是基础安装必需项，用户不需要就跳过。
-- 增加豆包/火山录音文件识别的本地工具层：通用 API key 可以用于文本模型，但音频识别还需要开通 `volc.bigasr.auc_turbo` 资源，并通过单独 ASR 脚本处理本地音频。
-- 在接入 Telegram 之前，先选择模型并验证 OpenClaw 本地可以正常回复。
-- 管理安装过程中弹出的终端窗口：需要用户操作的窗口保留，不需要的窗口及时关闭。
-- 安全配置 Telegram bot token，避免用户把 token 粘贴到聊天里。
-- 要求用户用自然语言确认 OpenClaw 的可见范围和权限范围。
-- 诊断 Telegram 回复慢、无回复、只在 WSL 被唤醒后才回复等问题。
-- 在需要时做 Telegram-only channel cleanup，但不误删模型、代理、权限、gateway 等非聊天配置。
+这套东西主要分成四块。
+
+第一块是安装和修复。它会优先按 Windows + WSL2 + Ubuntu 的路线处理 OpenClaw，先把 gateway、systemd user service、模型回复和权限范围确认好，再接 Telegram。
+
+第二块是后台稳定性。它把 keepalive、开机后恢复、长时间断网后的恢复、stale socket / polling stall 清理都当成基础设施，而不是出了问题以后临时补救。
+
+第三块是本机控制中心。它是一个 Windows 小程序，用来启动/关闭 OpenClaw、查看 gateway 和 Telegram 是否可用、观察后台任务、Token/成本流向、最近日志和本地产物心跳。它也可以待在系统托盘里，不需要每次都开浏览器。
+
+第四块是可选增强。比如 Jina embeddings、Tavily web search、豆包/火山录音文件识别。这些不是基础安装必需项，只有真的需要语义记忆、联网检索或本地音频处理时再加。
+
+另外，它会特别注意几件容易出事故的事：不要把 token 发到聊天里，不要把 key 写进仓库，不要随便重置配置，不要把“机器人没回”直接等同于“Telegram token 坏了”。
 
 ## 项目结构
 
