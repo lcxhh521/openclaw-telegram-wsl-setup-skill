@@ -4,6 +4,8 @@
   <img src="openclaw-telegram-wsl-setup/tools/openclaw-local-monitor/OpenClawMonitorIcon.png" alt="OpenClaw cute red mascot" width="120">
 </p>
 
+> 当前控制中心行为：打开 `OpenClaw Control` 只会显示本机状态，不会自动启动或关闭 OpenClaw。需要运行时点击 `开启 OpenClaw`；运行中按钮会变成 `关闭 OpenClaw`，再次点击才会真正关闭。`重新检测` 只重新读取状态，不负责启动或停止。
+
 这是我整理给自己和其他 OpenClaw 用户的一套 Windows/WSL 使用笔记和 Codex skill。
 
 它主要解决一类很烦的问题：OpenClaw 本身能跑，但一接上 Telegram、长期挂后台、电脑重启、WSL 休眠、断网恢复、代理切换、模型认证之后，就开始变得不稳定。很多时候表面现象只是“机器人不回消息”，真正的问题却藏在 gateway、systemd、WSL、token、模型或网络恢复里面。

@@ -1,15 +1,17 @@
 # OpenClaw 控制中心
 
-Windows 本机小程序面板，用于启动并观察运行在 Ubuntu on WSL2 里的 OpenClaw gateway。
+Windows 本机小程序面板，用于观察并手动控制运行在 Ubuntu on WSL2 里的 OpenClaw gateway。
 
-它是桌面上的唯一主入口。打开后会自动尝试唤醒 WSL、启动 `openclaw-gateway.service`，并显示：
+它是桌面上的唯一主入口。打开后只读取状态，不会自动启动或关闭 OpenClaw。需要运行时点击 `开启 OpenClaw`；运行中再次点击同一按钮会显示并执行 `关闭 OpenClaw`。
 
-- gateway 和 Telegram 是否就绪
-- `openclaw tasks list` 与 TaskFlow 里的后台任务状态
-- `openclaw status --json` 中的 token/context 快照
-- 从 session `usage.cost` 汇总的本月本地记录成本，按模型展示
-- 最近会话和 Telegram / 错误提醒
-- 托盘常驻能力
+面板显示：
+
+- gateway 和 Telegram 是否可用。
+- 后台是否存在 `queued/running` task、活跃 TaskFlow，或正在持续产出的本地 daemon / 工作区产物心跳。
+- Token / 上下文使用快照，以及主会话、Telegram、子任务的流向。
+- 从当月本地 session 日志里的 `usage.cost` 汇总已记录成本，并按模型列出成本和 token 去向；每个自然月刷新一次，这不是服务商账单替代品。
+- 最近会话和 Telegram / error 日志提醒。
+- 系统托盘常驻能力。
 
 ## Install From The Skill
 
@@ -26,9 +28,10 @@ The installer copies the monitor into:
 ```
 
 Then it builds `OpenClawMonitor.exe`, creates a Startup-folder shortcut, and starts the panel.
+
 It also creates desktop and Start Menu shortcuts for:
 
-- `OpenClaw Control`: opens the local control center. It starts OpenClaw if needed, then shows the local panel.
+- `OpenClaw Control`: opens the local control center. It shows the local panel first; use `开启 OpenClaw` when you actually want to start OpenClaw.
 
 The installer removes old separate `OpenClaw Monitor`, `OpenClaw 启动`, and other old `OpenClaw*.lnk` shortcuts in the same shortcut folders, because the control center is now the only main entry.
 
@@ -36,13 +39,15 @@ The installer removes old separate `OpenClaw Monitor`, `OpenClaw 启动`, and ot
 
 The local panel has an `打开 Control` button. Use it only when you need the original browser-based OpenClaw Control UI. The helper script `Start-OpenClaw.ps1` is kept as an internal launcher for that button, not as a separate desktop entry.
 
-That helper resolves the gateway token locally and opens the browser Control URL with a temporary `#token=...` fragment when OpenClaw exposes one. The token is not committed, printed to chat, or stored as a shortcut argument.
+The button only opens browser Control when the gateway is already running. If OpenClaw is stopped, the panel asks the user to click `开启 OpenClaw` first instead of implicitly starting it.
+
+After the gateway is running, the helper resolves the gateway token locally and opens the browser Control URL with a temporary `#token=...` fragment when OpenClaw exposes one. The token is not committed, printed to chat, or stored as a shortcut argument.
 
 After opening the URL, the helper makes a best-effort attempt to restore and focus the browser window. This gives the user visible feedback whether the browser was minimized, hidden in the background, or not yet open.
 
 ## Recheck Button
 
-The panel updates its display automatically. The `重新检测` button is not a cosmetic refresh; it manually wakes WSL, tries to start the gateway, then rebuilds the displayed snapshot. It does not edit config, reset tasks, or touch tokens.
+The panel updates its display automatically. The `重新检测` button manually rereads WSL/OpenClaw status and rebuilds the displayed snapshot. It does not start or stop OpenClaw, edit config, reset tasks, or touch tokens.
 
 Hovering over the button should show this in short form inside the panel itself. The hint should stay within the app window rather than using a native tooltip that can spill outside the interface.
 

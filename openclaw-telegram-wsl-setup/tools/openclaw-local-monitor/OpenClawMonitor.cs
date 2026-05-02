@@ -211,6 +211,7 @@ namespace OpenClawLocalMonitor
         Label sessionHeader;
         Label logHeader;
         Button refreshButton;
+        Button openClawPowerButton;
         CheckBox clashSafeModeCheck;
         RoundedPanel hoverTip;
         Label hoverTipText;
@@ -237,11 +238,12 @@ namespace OpenClawLocalMonitor
         ContextMenuStrip trayMenu;
         bool allowExit;
         bool trayNoticeShown;
-        bool startAttempted;
-        bool startingOpenClaw;
+        bool togglingOpenClaw;
+        bool lastGatewayOk;
         bool wasMinimized;
         bool smoothRestorePending;
         string startupNote = "";
+        ToolStripMenuItem openClawPowerTrayItem;
 
         public MonitorForm()
         {
@@ -276,7 +278,6 @@ namespace OpenClawLocalMonitor
                 Invalidate(true);
                 Update();
                 await EnsureClashSafeModeAsync(true);
-                await EnsureOpenClawStartedAsync(false);
                 await RefreshAsync(false);
             };
             FormClosing += OnFormClosing;
@@ -432,6 +433,12 @@ namespace OpenClawLocalMonitor
         {
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("显示面板", null, (s, e) => ShowFromTray());
+            openClawPowerTrayItem = new ToolStripMenuItem("开启 OpenClaw", null, async (s, e) =>
+            {
+                ShowFromTray();
+                await ToggleOpenClawAsync();
+            });
+            trayMenu.Items.Add(openClawPowerTrayItem);
             trayMenu.Items.Add("打开 Control", null, (s, e) => OpenControl());
             clashSafeModeTrayItem = new ToolStripMenuItem("Clash 安全模式", null, async (s, e) => await ToggleClashSafeModeAsync()) { Checked = clashSafeModeEnabled };
             trayMenu.Items.Add(clashSafeModeTrayItem);
@@ -522,6 +529,20 @@ namespace OpenClawLocalMonitor
 
             updated = MakeLabel("", 840, 28, 230, 24, 9f, Color.FromArgb(100, 116, 139), false);
             Controls.Add(updated);
+            openClawPowerButton = new Button
+            {
+                Text = "开启 OpenClaw",
+                Location = new Point(816, 20),
+                Size = new Size(130, 36),
+                BackColor = Color.FromArgb(22, 163, 74),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            openClawPowerButton.FlatAppearance.BorderSize = 0;
+            openClawPowerButton.Click += async (s, e) => await ToggleOpenClawAsync();
+            AddBoundedHoverTip(openClawPowerButton, "手动启动或关闭 OpenClaw gateway。");
+            Controls.Add(openClawPowerButton);
+
             openControlButton = new Button
             {
                 Text = "打开 Control",
@@ -711,13 +732,14 @@ namespace OpenClawLocalMonitor
                 var clientHeight = Math.Max(680, ClientSize.Height);
 
                 refreshButton.SetBounds(margin + contentWidth - 92, 20, 92, 36);
-                openControlButton.SetBounds(margin + contentWidth - 230, 20, 112, 36);
+                openControlButton.SetBounds(refreshButton.Left - gap - 112, 20, 112, 36);
+                openClawPowerButton.SetBounds(openControlButton.Left - gap - 130, 20, 130, 36);
                 var clashLeft = margin + 390;
                 var clashWidth = 180;
                 headerTitle.SetBounds(margin, 20, clashLeft - margin - gap, 34);
                 clashSafeModeCheck.SetBounds(clashLeft, 27, clashWidth, 24);
 
-                var updatedRight = openControlButton.Left - gap;
+                var updatedRight = openClawPowerButton.Left - gap;
                 var updatedDesiredWidth = 230;
                 var updatedLeft = updatedRight - updatedDesiredWidth;
                 var minimumUpdatedLeft = clashSafeModeCheck.Right + gap;
@@ -852,13 +874,11 @@ namespace OpenClawLocalMonitor
             refreshing = true;
             if (manualRecovery)
                 updated.Text = "重新检测中...";
-            else if (startingOpenClaw)
-                updated.Text = "启动中...";
+            else if (togglingOpenClaw)
+                updated.Text = lastGatewayOk ? "关闭中..." : "启动中...";
             refreshButton.Enabled = false;
             try
             {
-                if (manualRecovery)
-                    await EnsureOpenClawStartedAsync(true);
                 var snapshot = await Task.Run(() => BuildSnapshot());
                 Render(snapshot);
             }
@@ -871,26 +891,51 @@ namespace OpenClawLocalMonitor
             {
                 refreshing = false;
                 refreshButton.Enabled = true;
+                UpdateOpenClawPowerUi();
             }
         }
 
-        async Task EnsureOpenClawStartedAsync(bool force)
+        async Task ToggleOpenClawAsync()
         {
-            if ((!force && startAttempted) || startingOpenClaw) return;
-            startAttempted = true;
-            startingOpenClaw = true;
-            startupNote = force ? "正在重新检测并唤醒 OpenClaw..." : "正在启动 OpenClaw...";
+            if (togglingOpenClaw) return;
+            var shouldStop = lastGatewayOk;
+            togglingOpenClaw = true;
+            startupNote = shouldStop ? "正在关闭 OpenClaw..." : "正在启动 OpenClaw...";
             updated.Text = startupNote;
+            UpdateOpenClawPowerUi();
             try
             {
-                var result = await Task.Run(() => StartOpenClawGateway());
+                var result = await Task.Run(() => shouldStop ? StopOpenClawGateway() : StartOpenClawGateway());
                 startupNote = result.Ok
-                    ? (force ? "已重新检测：OpenClaw gateway 有响应。" : "OpenClaw 已启动，正在检查 Telegram。")
-                    : (force ? "已重新检测：gateway 仍未响应，请查看状态卡片。" : "已尝试启动 OpenClaw；如果仍异常，请查看状态卡片。");
+                    ? (shouldStop ? "OpenClaw 已关闭。" : "OpenClaw 已启动，正在检查 Telegram。")
+                    : (shouldStop ? "已尝试关闭 OpenClaw；如果仍显示运行，请稍后重新检测。" : "已尝试启动 OpenClaw；如果仍异常，请查看状态卡片。");
             }
             finally
             {
-                startingOpenClaw = false;
+                togglingOpenClaw = false;
+                UpdateOpenClawPowerUi();
+            }
+            await RefreshAsync(false);
+        }
+
+        void UpdateOpenClawPowerUi()
+        {
+            if (openClawPowerButton == null) return;
+
+            var text = togglingOpenClaw
+                ? (lastGatewayOk ? "关闭中..." : "启动中...")
+                : (lastGatewayOk ? "关闭 OpenClaw" : "开启 OpenClaw");
+
+            openClawPowerButton.Text = text;
+            openClawPowerButton.Enabled = !togglingOpenClaw;
+            openClawPowerButton.BackColor = togglingOpenClaw
+                ? Color.FromArgb(148, 163, 184)
+                : lastGatewayOk ? Color.FromArgb(220, 38, 38) : Color.FromArgb(22, 163, 74);
+
+            if (openClawPowerTrayItem != null)
+            {
+                openClawPowerTrayItem.Text = text;
+                openClawPowerTrayItem.Enabled = !togglingOpenClaw;
             }
         }
 
@@ -902,6 +947,16 @@ namespace OpenClawLocalMonitor
                 "for i in $(seq 1 45); do openclaw gateway probe >/dev/null 2>&1 && exit 0; sleep 1; done\n" +
                 "exit 1";
             return RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", script }, 60000);
+        }
+
+        CommandResult StopOpenClawGateway()
+        {
+            var script =
+                "systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true\n" +
+                "pkill -f '[o]penclaw-manual-keepalive' >/dev/null 2>&1 || true\n" +
+                "for i in $(seq 1 20); do openclaw gateway probe >/dev/null 2>&1 || exit 0; sleep 1; done\n" +
+                "exit 1";
+            return RunProcess("wsl.exe", new[] { "-d", WslDistro, "--", "bash", "-lc", script }, 30000);
         }
 
         async Task ToggleClashSafeModeAsync()
@@ -1025,6 +1080,12 @@ namespace OpenClawLocalMonitor
         {
             try
             {
+                if (!lastGatewayOk)
+                {
+                    statusLine.Text = "OpenClaw 未启动。请先点击“开启 OpenClaw”。";
+                    return;
+                }
+
                 statusLine.Text = "正在打开浏览器版 Control...";
                 var script = Path.Combine(Application.StartupPath, "Start-OpenClaw.ps1");
                 if (File.Exists(script))
@@ -1650,6 +1711,8 @@ namespace OpenClawLocalMonitor
             SetCard(overall, s.State == "Problem" ? "bad" : s.State == "Working" ? "work" : s.State == "Ready" ? "good" : "warn");
             gateway.Value.Text = s.GatewayText;
             SetCard(gateway, s.GatewayOk ? "good" : s.GatewaySoftFailure ? "warn" : "bad");
+            lastGatewayOk = s.GatewayOk;
+            UpdateOpenClawPowerUi();
             telegram.Value.Text = s.TelegramText;
             SetCard(telegram, s.TelegramOk ? "good" : "bad");
             var registeredWork = Math.Max(s.RunningTasks, s.FlowActive);

@@ -219,12 +219,12 @@ Codex may be able to infer and run the right install commands from the current e
 
 11. Install or verify the local OpenClaw Control Center on Windows when this skill bundle includes `tools/openclaw-local-monitor`.
    - Treat the control center as optional but recommended infrastructure after gateway/model/keepalive are healthy.
-   - It is the single user-facing desktop entry: opening it should wake WSL, start the OpenClaw gateway if needed, then show local status. Do not keep a separate `OpenClaw 启动` shortcut.
+   - It is the single user-facing desktop entry: opening it should show local status without automatically starting or stopping OpenClaw. The user starts or stops OpenClaw explicitly with the `开启 OpenClaw` / `关闭 OpenClaw` button. Do not keep a separate `OpenClaw 启动` shortcut.
    - The panel must not store tokens, auth profiles, logs, or raw OpenClaw config. Its `打开 Control` helper may resolve the gateway token locally and pass it only as a transient browser URL fragment so the user does not have to paste the gateway token manually. After opening the URL, the helper should make a best-effort attempt to restore and focus the browser window so the click has visible feedback whether the browser was minimized, hidden, or not yet open.
    - Build it locally on Windows from source; do not download or run third-party binaries.
    - Install it to a user-local path such as `%LOCALAPPDATA%\OpenClawMonitor`, create a Startup-folder shortcut named `OpenClaw Control.lnk`, remove old `OpenClaw Monitor` / `OpenClaw 启动` shortcuts, and start it as a tray-capable app.
    - Explain its backend-work meaning: the "后台任务" count should come from `queued/running` tasks, active/blocked/cancel-requested TaskFlow pressure, and clearly labeled local daemon/workspace artifact heartbeat. Recent Telegram/session activity is only context and must not be presented as a running background task by itself.
-   - Verify the control center opens, starts OpenClaw when needed, can open browser Control without manual gateway-token entry, and can be minimized/closed to the system tray.
+   - Verify the control center opens without auto-starting OpenClaw, can explicitly start and stop OpenClaw with the power button, can open browser Control without manual gateway-token entry after the gateway is running, and can be minimized/closed to the system tray.
 
 12. If the user wants optional API enhancements, offer Jina embeddings and Tavily web search from `tools/openclaw-optional-apis`.
    - Treat both as opt-in enhancements, not required OpenClaw infrastructure.
@@ -838,7 +838,7 @@ After OpenClaw is installed, the model is verified, and keepalive/autostart is i
 tools/openclaw-local-monitor/
 ```
 
-The control center is the user-local Windows entry point. It should start or wake OpenClaw, then help the user answer:
+The control center is the user-local Windows entry point. Opening it should observe current state first, not silently start OpenClaw. It should help the user answer:
 
 - Is the gateway reachable?
 - Is Telegram connected?
@@ -852,11 +852,11 @@ Important semantics:
 - "后台任务" means real backend work: `openclaw tasks list --json` entries with `status=queued` or `status=running`, TaskFlow pressure from `openclaw tasks flow list` where active/blocked/cancel-requested is nonzero, plus clearly labeled local daemon/workspace artifact heartbeat when OpenClaw is producing local learning artifacts outside the task registry.
 - Recent Telegram messages, recently updated sessions, or token growth are not enough to say a background task is running. Show them only as context unless there is also a task, TaskFlow pressure, daemon, or artifact heartbeat.
 - Cost shown in the panel is OpenClaw's local recorded/estimated `usage.cost` from this calendar month's session logs. It resets naturally at the start of each calendar month, helps explain model spend direction, but is not a provider invoice and must not be described as guaranteed billing truth.
-- The control center may start `openclaw-gateway.service`, keep WSL awake, and open the browser-based Control UI. It must not edit OpenClaw config, auth profiles, tokens, provider keys, channel settings, or gateway service files.
+- The control center may start or stop `openclaw-gateway.service` only after the user clicks the explicit `开启 OpenClaw` / `关闭 OpenClaw` button. It may keep WSL awake after an explicit start and open the browser-based Control UI after the gateway is running. It must not edit OpenClaw config, auth profiles, tokens, provider keys, channel settings, or gateway service files.
 - The control center may offer `Clash 安全模式` for Clash Verge Rev users who need TUN/global-style routing for OpenClaw, Codex, or foreign model providers while preserving domestic direct/rule routing for WeChat, Tencent services, and China-region links. This option should use the local Mihomo named pipe to keep Clash in rule mode when necessary, let OpenClaw/Codex follow the user's selected `GLOBAL` proxy group, and leave node choice to Clash Verge's `GLOBAL` group. If the user is not using Clash global/TUN, or domestic apps already work normally, explain that this option is usually unnecessary. It must not store proxy subscriptions, provider secrets, auth profiles, raw Clash config, or machine-specific node names in the repository.
-- The `打开 Control` path should use `Start-OpenClaw.ps1` as an internal helper. That helper may resolve the gateway token locally and pass it as a temporary browser URL fragment; it must not create a token-bearing shortcut, print the token, or commit it to the repository. After opening the browser Control URL, it should attempt to restore and focus a browser window so the user sees an immediate pop-up/foreground action.
-- The panel should automatically update display data on its timer. A manual button should not be a meaningless duplicate refresh; label it `重新检测` and make it actively wake WSL/start the gateway before rebuilding the displayed snapshot. It must not reset tasks or change configuration.
-- Add an in-window bounded hover hint to `重新检测` explaining that it wakes WSL, tries to start the gateway, and rereads current status without changing config or resetting tasks. Do not use a native tooltip that can overflow outside the app window.
+- The `打开 Control` path should use `Start-OpenClaw.ps1` as an internal helper only when the gateway is already running. That helper may resolve the gateway token locally and pass it as a temporary browser URL fragment; it must not create a token-bearing shortcut, print the token, or commit it to the repository. After opening the browser Control URL, it should attempt to restore and focus a browser window so the user sees an immediate pop-up/foreground action.
+- The panel should automatically update display data on its timer. A manual button should not be a meaningless duplicate refresh; label it `重新检测` and make it actively reread WSL/OpenClaw status without starting or stopping OpenClaw. It must not reset tasks or change configuration.
+- Add an in-window bounded hover hint to `重新检测` explaining that it rereads current status without changing config, resetting tasks, or starting/stopping OpenClaw. Do not use a native tooltip that can overflow outside the app window.
 - Restoring from tray or the Windows taskbar should not show black or unpainted regions. Use ordinary double buffering and explicit layout/repaint on show/restore paths. Avoid `WS_EX_COMPOSITED` full-window compositing here; on this WinForms panel it can cause child controls to appear as black or unpainted rectangles during startup or restore.
 - Use a transparent-background, friendly red OpenClaw-style mascot icon for desktop, taskbar, and tray. Do not use a screenshot or asset with a dark background as the icon.
 - The panel must not print or store secrets.
@@ -875,7 +875,7 @@ What the installer should do:
 3. Create a Startup-folder shortcut named `OpenClaw Control.lnk`.
 4. Remove old `OpenClaw Monitor` and `OpenClaw 启动` shortcuts from Desktop, Start Menu, and Startup when present.
 5. Start the control center.
-6. Verify that the window opens, shows the custom icon, starts OpenClaw if needed, opens browser Control without manual gateway-token entry, brings the browser window forward as visible feedback when possible, automatically updates status, offers `重新检测` for active wake/start/probe, and minimizes/closes to the system tray.
+6. Verify that the window opens, shows the custom icon, does not auto-start OpenClaw, explicitly starts/stops OpenClaw through the power button, opens browser Control without manual gateway-token entry after the gateway is running, brings the browser window forward as visible feedback when possible, automatically updates status, offers `重新检测` for status reread only, and minimizes/closes to the system tray.
 
 Manual build command if needed:
 
