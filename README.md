@@ -61,9 +61,9 @@ Windows
 
 第三块是本机控制中心。它是一个 Windows 小程序，用来启动/关闭 OpenClaw、查看 gateway 和 Telegram 是否可用、观察后台任务、Token/成本流向、最近日志和本地产物心跳。它也可以待在系统托盘里，不需要每次都开浏览器。
 
-第四块是 IMA 知识库接入。它记录了如何给 OpenClaw 安装官方 `ima-skills`，用 IMA OpenAPI 读取和搜索腾讯 ima 知识库、添加网页/微信文章、上传文件、管理笔记，并通过自然语言触发这些能力。
+第四块是市场信息浸泡模块。它是一个可选 `openclaw-job-module`，用于按时间段抓取 7x24 财经快讯流，交给 OpenClaw 做轻整理，并在成功后发布到 Notion，必要时再把日报链接或文件推送到 Telegram。这个模块不是基础安装必需项，只有用户明确要市场日报、信息浸泡或 Notion 闭环时才安装。
 
-第五块是市场信息浸泡模块。它是一个可选 `openclaw-job-module`，用于按时间段抓取 7x24 财经快讯流，交给 OpenClaw 做轻整理，并在成功后发布到 Notion，必要时再把日报链接或文件推送到 Telegram。这个模块不是基础安装必需项，只有用户明确要市场日报、信息浸泡或 Notion 闭环时才安装。
+第五块是 IMA 知识库接入。它记录了如何给 OpenClaw 安装官方 `ima-skills`，用 IMA OpenAPI 读取和搜索腾讯 ima 知识库、添加网页/微信文章、上传文件、管理笔记，并通过自然语言触发这些能力。
 
 第六块是可选增强。比如 Jina embeddings、Tavily web search、豆包/火山录音文件识别。这些不是基础安装必需项，只有真的需要语义记忆、联网检索或本地音频处理时再加。
 
@@ -119,42 +119,6 @@ openclaw-telegram-wsl-setup/
 
 这个目录名暂时保留是为了兼容已经安装的 Codex skill 和旧链接；公开项目名称以 **OpenClaw 养虾指南** 为准。这个目录应保持干净，只包含 skill 本身需要的文件和可复用工具。不要把本机 OpenClaw 配置、Telegram token、日志、截图、编译产物或机器专属诊断文件放进去。
 
-## 市场信息浸泡模块
-
-仓库附带一个可选的市场信息浸泡模块：
-
-```text
-modules/openclaw-market-immersion/
-```
-
-它不是默认安装内容，也不是普通 Codex skill，而是给 OpenClaw 调用的 `openclaw-job-module`。只有用户明确要“市场信息浸泡”“财经快讯日报”“Notion 日报闭环”或类似长期自动化时，才引导用户决定是否安装。
-
-模块的目标是：
-
-- 按 09:05、12:15、15:20、22:10 四个时间点运行。
-- 覆盖对应时间段内的 7x24 财经快讯流。
-- 对东方财富、财联社电报、金十数据、新浪财经、华尔街见闻等来源做去重和窗口完整性检查。
-- 把整理任务交给 OpenClaw，而不是在采集脚本里直接做最终判断。
-- 只有采集、OpenClaw 轻整理、Notion 发布都成功时，才把这一轮视为成功。
-- 如果机器关机、WSL 未启动或网络中断，依靠 `systemd --user` timer 的 `Persistent=yes` 和 service retry 尽量在恢复后补跑。
-
-日报默认结构是：
-
-```text
-1. 今日市场总览
-2. 高频主题/板块
-3. 公司公告与事件
-4. 研报/机构观点
-5. 政策与宏观信息
-6. 异动股票/板块
-7. 自选股相关信息
-8. 未归类信息
-9. 原始消息流
-观察备忘
-```
-
-1-8 是轻整理后的文本和信源；9 保留对应时间段内按时间顺序排列的原始消息流。Notion、Telegram 推送和定时器都应由用户明确选择启用；密钥只通过本地终端或提供商页面输入，不进入聊天和仓库。
-
 ## 本机 OpenClaw 控制中心
 
 仓库附带一个 Windows 原生控制中心：
@@ -192,6 +156,42 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-OpenClawMonito
 安装脚本会把源码复制到 `%LOCALAPPDATA%\OpenClawMonitor`，在本机编译 `OpenClawMonitor.exe`，创建 `OpenClaw Control` 桌面、开始菜单和 Startup-folder 快捷方式，清理旧的 `OpenClaw Monitor` / `OpenClaw 启动` 等旧入口，并启动控制中心。仓库不提交任何真实 token、API key、auth profile 或本机日志。
 
 图标是透明背景的可爱红色 OpenClaw 小助手风格，避免使用带黑色背景的截图作为桌面或托盘图标。
+
+## 市场信息浸泡模块
+
+仓库附带一个可选的市场信息浸泡模块：
+
+```text
+modules/openclaw-market-immersion/
+```
+
+它不是默认安装内容，也不是普通 Codex skill，而是给 OpenClaw 调用的 `openclaw-job-module`。只有用户明确要“市场信息浸泡”“财经快讯日报”“Notion 日报闭环”或类似长期自动化时，才引导用户决定是否安装。
+
+模块的目标是：
+
+- 按 09:05、12:15、15:20、22:10 四个时间点运行。
+- 覆盖对应时间段内的 7x24 财经快讯流。
+- 对东方财富、财联社电报、金十数据、新浪财经、华尔街见闻等来源做去重和窗口完整性检查。
+- 把整理任务交给 OpenClaw，而不是在采集脚本里直接做最终判断。
+- 只有采集、OpenClaw 轻整理、Notion 发布都成功时，才把这一轮视为成功。
+- 如果机器关机、WSL 未启动或网络中断，依靠 `systemd --user` timer 的 `Persistent=yes` 和 service retry 尽量在恢复后补跑。
+
+日报默认结构是：
+
+```text
+1. 今日市场总览
+2. 高频主题/板块
+3. 公司公告与事件
+4. 研报/机构观点
+5. 政策与宏观信息
+6. 异动股票/板块
+7. 自选股相关信息
+8. 未归类信息
+9. 原始消息流
+观察备忘
+```
+
+1-8 是轻整理后的文本和信源；9 保留对应时间段内按时间顺序排列的原始消息流。Notion、Telegram 推送和定时器都应由用户明确选择启用；密钥只通过本地终端或提供商页面输入，不进入聊天和仓库。
 
 ## IMA 知识库接入
 
