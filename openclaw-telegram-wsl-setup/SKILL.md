@@ -1011,7 +1011,7 @@ Install timers only after the user opts in:
 mkdir -p "$HOME/.config/systemd/user"
 cp "$HOME/.openclaw/workspace/market-immersion-module/systemd/"* "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
-systemctl --user enable --now openclaw-market-immersion.timer
+systemctl --user enable --now openclaw-market-immersion-morning.timer
 systemctl --user enable --now openclaw-market-immersion-midday.timer
 systemctl --user enable --now openclaw-market-immersion-close.timer
 systemctl --user enable --now openclaw-market-immersion-night.timer
@@ -1021,7 +1021,7 @@ Verification:
 
 ```bash
 systemctl --user list-timers 'openclaw-market-immersion*'
-systemctl --user status openclaw-market-immersion.timer --no-pager
+systemctl --user status openclaw-market-immersion-morning.timer --no-pager
 "$HOME/.openclaw/workspace/market-immersion-module/scripts/run_market_immersion.sh" --phase smoke --no-publish
 ```
 
