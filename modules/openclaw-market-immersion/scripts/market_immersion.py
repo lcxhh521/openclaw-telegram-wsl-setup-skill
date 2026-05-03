@@ -195,6 +195,63 @@ def dedupe_key_for_item(*, title: str, content: str, url: str, code: str = "") -
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
+def normalize_for_duplicate(text: Any, limit: int = 120) -> str:
+    value = strip_html(text)
+    value = re.sub(r"【([^】]{4,100})】", r"\1", value)
+    value = re.sub(r"(财联社|金十数据|央视新闻|新华社)?\d{1,2}月\d{1,2}日电[，,]?", "", value)
+    value = re.sub(r"据[^，,。]{2,40}(介绍|消息|报道|透露|表示)[，,]?", "", value)
+    value = re.sub(r"[^\w\u4e00-\u9fff]+", "", value.lower())
+    return value[:limit]
+
+
+def duplicate_keys_for_item(item: dict[str, Any]) -> list[str]:
+    title = str(item.get("title") or "")
+    content = str(item.get("content") or "")
+    keys: list[str] = []
+    bracket_match = re.match(r"\s*【([^】]{4,100})】", content)
+    for value in (
+        title,
+        bracket_match.group(1) if bracket_match else "",
+        content,
+    ):
+        normalized = normalize_for_duplicate(value)
+        if len(normalized) >= 12 and normalized not in keys:
+            keys.append(normalized)
+    return keys
+
+
+def source_priority(source: str) -> int:
+    priorities = {
+        "财联社": 5,
+        "东方财富快讯": 4,
+        "东方财富": 4,
+        "华尔街见闻": 3,
+        "金十数据": 2,
+        "新浪财经": 1,
+    }
+    return priorities.get(source, 0)
+
+
+def merge_duplicate_item(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    sources = list(existing.get("duplicate_sources") or [existing.get("source") or "未知"])
+    source = str(incoming.get("source") or "未知")
+    if source not in sources:
+        sources.append(source)
+    existing["duplicate_sources"] = sources
+    existing["duplicate_count"] = int(existing.get("duplicate_count") or 1) + 1
+
+    existing_content = str(existing.get("content") or "")
+    incoming_content = str(incoming.get("content") or "")
+    if len(incoming_content) > len(existing_content) + 12 or (
+        len(incoming_content) >= len(existing_content)
+        and source_priority(source) > source_priority(str(existing.get("source") or ""))
+    ):
+        for key in ("title", "content", "content_quality", "date", "source", "type", "entity", "url", "raw_file", "bucket", "parsed_at", "entry_id"):
+            if incoming.get(key):
+                existing[key] = incoming[key]
+    return existing
+
+
 def strip_html(text: Any) -> str:
     value = html.unescape(str(text or ""))
     value = re.sub(r"<br\s*/?>", "\n", value, flags=re.I)
@@ -1222,7 +1279,11 @@ def raw_message_meta_line(item: dict[str, Any]) -> str:
     if item.get("date"):
         parts.append(str(item["date"]))
     if item.get("source"):
-        parts.append(str(item["source"]))
+        sources = [str(x) for x in item.get("duplicate_sources") or [] if x]
+        if len(sources) > 1:
+            parts.append(f"{item['source']}等{len(sources)}源")
+        else:
+            parts.append(str(item["source"]))
     return " | ".join(parts)
 
 
@@ -1230,16 +1291,34 @@ def build_report_items(
     entries: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[tuple[str, int, str, str], str]]:
     all_items: list[dict[str, Any]] = []
+    key_to_item: dict[str, dict[str, Any]] = {}
+    identity_to_item: dict[tuple[str, int, str, str], dict[str, Any]] = {}
     for entry in entries:
         for item in entry_items(entry):
             copied = dict(item)
             copied["entry_id"] = entry["id"]
-            all_items.append(copied)
+            copied["duplicate_sources"] = [str(copied.get("source") or "未知")]
+            copied["duplicate_count"] = 1
+            keys = duplicate_keys_for_item(copied)
+            existing = next((key_to_item[key] for key in keys if key in key_to_item), None)
+            if existing is None:
+                all_items.append(copied)
+                for key in keys:
+                    key_to_item[key] = copied
+                identity_to_item[item_identity(copied)] = copied
+                continue
+
+            merge_duplicate_item(existing, copied)
+            for key in keys:
+                key_to_item[key] = existing
+            identity_to_item[item_identity(copied)] = existing
+
     all_items.sort(key=item_sort_key)
     serial_by_item: dict[tuple[str, int, str, str], str] = {}
     for index, item in enumerate(all_items, 1):
         item["serial"] = str(index)
-        serial_by_item[item_identity(item)] = item["serial"]
+    for identity, item in identity_to_item.items():
+        serial_by_item[identity] = item["serial"]
     return all_items, serial_by_item
 
 
