@@ -1870,19 +1870,22 @@ def notion_request(
     method: str,
     url: str,
     token: str,
-    payload: dict[str, Any],
+    payload: dict[str, Any] | None = None,
     timeout: int,
 ) -> dict[str, Any]:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    body = None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": "2022-06-28",
+    }
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
         url,
         data=body,
         method=method,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28",
-        },
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -1890,6 +1893,35 @@ def notion_request(
     except urllib.error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Notion API {exc.code}: {details}") from exc
+
+
+def list_notion_child_pages(parent_page_id: str, token: str, timeout: int) -> list[dict[str, Any]]:
+    children: list[dict[str, Any]] = []
+    cursor = ""
+    while True:
+        url = f"https://api.notion.com/v1/blocks/{parent_page_id}/children?page_size=100"
+        if cursor:
+            url += "&start_cursor=" + cursor
+        payload = notion_request(method="GET", url=url, token=token, timeout=timeout)
+        children.extend(payload.get("results") or [])
+        if not payload.get("has_more"):
+            return [child for child in children if child.get("type") == "child_page"]
+        cursor = payload.get("next_cursor") or ""
+
+
+def find_notion_child_page_by_title(
+    *,
+    parent_page_id: str,
+    token: str,
+    title: str,
+    timeout: int,
+) -> dict[str, Any] | None:
+    wanted = normalize_ws(title)
+    for child in list_notion_child_pages(parent_page_id, token, timeout):
+        child_title = normalize_ws((child.get("child_page") or {}).get("title") or "")
+        if child_title == wanted:
+            return child
+    return None
 
 
 def report_title_for_phase(*, report_path: Path, phase: str, phase_label: str) -> str:
@@ -1958,6 +1990,39 @@ def publish_notion_page(
     blocks = markdown_to_notion_blocks(markdown)
     timeout = int(notion.get("timeout") or 120)
     started = now_local().isoformat(timespec="seconds")
+    existing_page = find_notion_child_page_by_title(
+        parent_page_id=parent_page_id,
+        token=token,
+        title=title,
+        timeout=timeout,
+    )
+    if existing_page and existing_page.get("id"):
+        publication_state[publication_key] = {
+            "page_id": existing_page["id"],
+            "url": existing_page.get("url"),
+            "title": title,
+            "published_at": now_local().isoformat(timespec="seconds"),
+            "report_path": str(report_path),
+            "discovered_from_notion": True,
+        }
+        try:
+            publication_state_path.write_text(
+                json.dumps(publication_state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        return {
+            "enabled": True,
+            "attempted": True,
+            "skipped_duplicate": True,
+            "reason": "same title already exists under Notion parent",
+            "publication_key": publication_key,
+            "page_id": existing_page["id"],
+            "url": existing_page.get("url"),
+            "title": title,
+            "source": "notion_title_check",
+        }
 
     try:
         page = notion_request(
@@ -2036,9 +2101,10 @@ def deliver_report(
         return {"enabled": True, "attempted": False, "reason": "missing telegram target"}
 
     openclaw_bin = Path(config.get("openclaw_bin") or "openclaw").expanduser()
+    title = report_title_for_phase(report_path=report_path, phase=phase, phase_label=phase_label)
     message = (
-        f"市场信息浸泡日志：{phase_label}\n"
-        f"{'Notion 日报：' + notion_url if notion_url else '完整 Markdown 日报已附上。'}\n"
+        f"每日快讯简报：{title}\n"
+        f"{'Notion：' + notion_url if notion_url else 'Markdown 简报已生成。'}\n"
         f"manifest: {manifest_path}"
     )
     cmd = [
@@ -2051,10 +2117,10 @@ def deliver_report(
         target,
         "--message",
         message,
-        "--media",
-        str(report_path),
-        "--force-document",
     ]
+    send_mode = str(telegram.get("send_mode") or "link").strip().lower()
+    if send_mode in {"document", "media"} or (not notion_url and send_mode != "link"):
+        cmd.extend(["--media", str(report_path), "--force-document"])
     account = str(telegram.get("account") or "").strip()
     if account:
         cmd.extend(["--account", account])

@@ -167,7 +167,7 @@
     "channel": "telegram",
     "target": "7215741815",
     "account": "default",
-    "send_mode": "document",
+    "send_mode": "link",
     "send_smoke": false,
     "timeout": 120
   },

@@ -17,7 +17,7 @@
 
 - `morning`：09:05 盘前
 - `midday`：12:15 午间
-- `close`：15:20 收盘
+- `close`：15:20 收盘后
 - `night`：22:10 夜间
 - `smoke`：连通性测试，不发布 Notion / Telegram
 
