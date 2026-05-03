@@ -202,6 +202,39 @@ def strip_html(text: Any) -> str:
     return " ".join(value.split())
 
 
+def choose_content(*values: Any, title: str = "") -> str:
+    candidates = []
+    normalized_title = " ".join(str(title or "").split())
+    for value in values:
+        text = strip_html(value)
+        if not text:
+            continue
+        candidates.append(text)
+    if not candidates:
+        return normalized_title
+
+    non_title_candidates = [
+        text
+        for text in candidates
+        if text != normalized_title and len(text) > len(normalized_title) + 8
+    ]
+    if non_title_candidates:
+        return max(non_title_candidates, key=len)
+    return max(candidates, key=len)
+
+
+def content_quality(*, title: str, content: str) -> str:
+    normalized_title = " ".join(str(title or "").split())
+    normalized_content = " ".join(str(content or "").split())
+    if not normalized_content:
+        return "missing"
+    if normalized_content == normalized_title:
+        return "title_only"
+    if normalized_title and len(normalized_content) <= len(normalized_title) + 8:
+        return "title_like"
+    return "body"
+
+
 def cls_query_sign(query: str) -> str:
     sha1_value = hashlib.sha1(query.encode("utf-8")).hexdigest()
     return hashlib.md5(sha1_value.encode("utf-8")).hexdigest()
@@ -359,10 +392,16 @@ def collect_eastmoney_feed_entry(
                     continue
                 code = str(row.get("code") or row.get("newsId") or row.get("uniqueUrl") or row.get("url") or "")
                 title = str(row.get("title") or "").strip()
+                content = choose_content(
+                    row.get("content"),
+                    row.get("summary"),
+                    row.get("digest"),
+                    title=title,
+                )
                 date = str(row.get("showTime") or row.get("time") or row.get("date") or "").strip()
                 dedupe_key = dedupe_key_for_item(
                     title=title,
-                    content=str(row.get("summary") or row.get("digest") or row.get("content") or ""),
+                    content=content,
                     url=str(row.get("uniqueUrl") or row.get("url") or ""),
                     code=code,
                 )
@@ -384,7 +423,8 @@ def collect_eastmoney_feed_entry(
                     "index": len(items) + 1,
                     "code": code,
                     "title": title,
-                    "content": row.get("summary") or row.get("digest") or row.get("content") or title,
+                    "content": content,
+                    "content_quality": content_quality(title=title, content=content),
                     "date": date,
                     "source": row.get("mediaName") or "东方财富",
                     "type": column_name,
@@ -445,7 +485,7 @@ def collect_eastmoney_feed_entry(
                 if not keep:
                     continue
                 title = str(row.get("title") or "").strip()
-                content = str(row.get("digest") or row.get("simdigest") or title).strip()
+                content = choose_content(row.get("digest"), row.get("simdigest"), title=title)
                 url_value = str(row.get("url_unique") or row.get("url_w") or row.get("url_m") or "").strip()
                 key = dedupe_key_for_item(
                     title=title,
@@ -461,6 +501,7 @@ def collect_eastmoney_feed_entry(
                     "code": str(row.get("newsid") or row.get("id") or ""),
                     "title": title,
                     "content": content or title,
+                    "content_quality": content_quality(title=title, content=content),
                     "date": date_text,
                     "source": "东方财富快讯",
                     "type": name,
@@ -534,7 +575,7 @@ def collect_eastmoney_feed_entry(
                 if not keep:
                     continue
                 title = str(row.get("title") or row.get("brief") or "").strip()
-                content = str(row.get("brief") or row.get("content") or title).strip()
+                content = choose_content(row.get("content"), row.get("brief"), title=title)
                 url_value = str(row.get("shareurl") or row.get("url") or "https://www.cls.cn/telegraph").strip()
                 key = dedupe_key_for_item(title=title, content=content, url=url_value, code=str(row.get("id") or ""))
                 if key in seen:
@@ -545,6 +586,7 @@ def collect_eastmoney_feed_entry(
                     "code": str(row.get("id") or ""),
                     "title": title,
                     "content": content or title,
+                    "content_quality": content_quality(title=title, content=content),
                     "date": date_text,
                     "source": "财联社",
                     "type": name,
@@ -619,8 +661,8 @@ def collect_eastmoney_feed_entry(
                 if not keep:
                     continue
                 data_obj = row.get("data") or {}
-                content = str(data_obj.get("content") or data_obj.get("title") or "").replace("<br/>", "\n")
-                title = str(data_obj.get("title") or content).strip()
+                title = str(data_obj.get("title") or data_obj.get("content") or "").strip()
+                content = choose_content(data_obj.get("content"), title=title)
                 url_value = str(data_obj.get("link") or "https://www.jin10.com/flash")
                 key = dedupe_key_for_item(title=title, content=content, url=url_value, code=str(row.get("id") or ""))
                 if key in seen:
@@ -631,6 +673,7 @@ def collect_eastmoney_feed_entry(
                     "code": str(row.get("id") or ""),
                     "title": title,
                     "content": content or title,
+                    "content_quality": content_quality(title=title, content=content),
                     "date": date_text,
                     "source": "金十数据",
                     "type": name,
@@ -708,6 +751,7 @@ def collect_eastmoney_feed_entry(
                     "code": str(row.get("id") or ""),
                     "title": title,
                     "content": content or title,
+                    "content_quality": content_quality(title=title, content=content),
                     "date": date_text,
                     "source": "新浪财经",
                     "type": name + (f" / {','.join(tag_names)}" if tag_names else ""),
@@ -786,6 +830,7 @@ def collect_eastmoney_feed_entry(
                     "code": str(row.get("id") or ""),
                     "title": title,
                     "content": content or title,
+                    "content_quality": content_quality(title=title, content=content),
                     "date": normalized_date,
                     "source": "华尔街见闻",
                     "type": name,
@@ -853,7 +898,7 @@ def collect_eastmoney_feed_entry(
                 if not keep:
                     continue
                 title = str(row.get("title") or "").strip()
-                content = str(row.get("intro") or row.get("summary") or row.get("content") or title).strip()
+                content = choose_content(row.get("content"), row.get("summary"), row.get("intro"), title=title)
                 url_value = str(row.get("url") or row.get("wapurl") or "").strip()
                 key = dedupe_key_for_item(title=title, content=content, url=url_value, code=str(row.get("id") or ""))
                 if key in seen:
@@ -864,6 +909,7 @@ def collect_eastmoney_feed_entry(
                     "code": str(row.get("id") or ""),
                     "title": title,
                     "content": content or title,
+                    "content_quality": content_quality(title=title, content=content),
                     "date": normalized_date,
                     "source": str(row.get("media_name") or row.get("source") or "新浪财经"),
                     "type": name,
@@ -1004,6 +1050,10 @@ def extract_mx_search_items(raw_file: str) -> list[dict[str, Any]]:
                 "entity": item.get("entityFullName") or "",
                 "url": item.get("jumpUrl") or "",
                 "raw_file": raw_file,
+                "content_quality": content_quality(
+                    title=str(item.get("title") or ""),
+                    content=str(item.get("content") or ""),
+                ),
             }
         )
     return extracted
@@ -1054,6 +1104,10 @@ def classify_items(
                 bucket = "future_or_clock_skew"
             item["bucket"] = bucket
             item["parsed_at"] = parsed.isoformat(timespec="seconds") if parsed else None
+            item["content_quality"] = content_quality(
+                title=str(item.get("title") or ""),
+                content=str(item.get("content") or ""),
+            )
             classified.append(item)
             counts[bucket] += 1
     return {"counts": counts, "items": classified}
@@ -1147,6 +1201,31 @@ def summary_sentence(item: dict[str, Any]) -> str:
     return short_text(base, 260)
 
 
+def display_body_without_title(*, title: str, content: str) -> str:
+    normalized_title = " ".join(str(title or "").split())
+    normalized_content = " ".join(str(content or "").split())
+    if not normalized_content:
+        return ""
+    if not normalized_title:
+        return normalized_content
+
+    bracketed_title = f"【{normalized_title}】"
+    if normalized_content.startswith(bracketed_title):
+        return normalized_content[len(bracketed_title) :].lstrip(" ：:，,。")
+    if normalized_content.startswith(normalized_title):
+        return normalized_content[len(normalized_title) :].lstrip(" ：:，,。")
+    return normalized_content
+
+
+def raw_message_meta_line(item: dict[str, Any]) -> str:
+    parts = []
+    if item.get("date"):
+        parts.append(str(item["date"]))
+    if item.get("source"):
+        parts.append(str(item["source"]))
+    return " | ".join(parts)
+
+
 def build_report_items(
     entries: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[tuple[str, int, str, str], str]]:
@@ -1196,7 +1275,7 @@ def build_openclaw_summary_prompt(
         "规则：\n"
         "1. 只整理事实和消息含义，不预测涨跌，不给买卖建议。\n"
         "2. 1-7栏目只输出轻整理后的中文文本、信源、原文编号；不要输出状态、时间归类、信息类型等工程字段。\n"
-        "3. 输入里的 date/source/title 只作为判断归类的证据；整理正文不要机械复述发布时间、来源名或标题。\n"
+        "3. 输入里的 content 是正文材料；title 只作为判断归类的辅助证据。content_quality 为 title_only/title_like 的消息要当作短快讯，不要扩写成不存在的正文。\n"
         "4. 只有当时间是消息报道的事件时间、截止时间、会议时间、披露时间等内容本身的一部分时，才写入整理正文。\n"
         "5. 不能归入前7个明确栏目的消息，放入“未归类信息”并同样轻整理；不要因为未归类就忽略。\n"
         "6. 不要丢掉重要分歧和风险表述；遇到情绪化或观点化消息，要保留其观点属性，不把它写成事实。\n"
@@ -1228,6 +1307,10 @@ def build_openclaw_payload_items(
                 "source": item.get("source"),
                 "type": item.get("type"),
                 "bucket": item.get("bucket"),
+                "content_quality": item.get("content_quality") or content_quality(
+                    title=str(item.get("title") or ""),
+                    content=str(item.get("content") or ""),
+                ),
                 "content": short_text(str(item.get("content") or ""), max_item_chars),
             }
         )
@@ -1260,7 +1343,7 @@ def build_openclaw_chunked_messages(
             "你是市场信息浸泡日报的轻整理层。任务不是投研判断，也不是交易建议。\n"
             "接下来我会分片发送原始消息 JSON。请先只确认已接收，不要生成日报。\n"
             "最终要求：按栏目生成保持原意的轻整理文本；1-7只输出整理后的中文文本、信源、原文编号；"
-            "输入里的时间、来源、标题只作为证据，不要机械写进整理正文；"
+            "输入里的content是正文材料，title只作归类辅助；content_quality为title_only/title_like的消息按短快讯处理，不要扩写；"
             "只有事件时间本身才可写入正文；不能归入前7栏的放入“未归类信息”；返回严格 JSON，不要 Markdown。\n"
             'JSON格式：{"sections":{"今日市场总览":[{"text":"...","source":"...","refs":["1"]}],'
             '"未归类信息":[{"text":"...","source":"...","refs":["2"]}]},"observation":'
@@ -1391,10 +1474,7 @@ def append_section_digest(
     items = sorted(entry_items(entry), key=item_sort_key)
     if items:
         for item in items:
-            serial = serial_by_item.get(item_identity(item), "#??")
-            source = str(item.get("source") or "未知来源")
             lines.append(f"- {summary_sentence(item)}")
-            lines.append(f"  - 信源：{source}｜原文：{serial}")
         lines.append("")
     else:
         lines.append("- 本轮暂无可整理信息。")
@@ -1422,10 +1502,7 @@ def append_ai_section_digest(
         text = " ".join(str(row.get("text") or "").split())
         if not text:
             continue
-        source = "、".join(str(x) for x in row.get("sources") or [] if x) or str(row.get("source") or "未知来源")
-        refs = "、".join(str(x) for x in row.get("refs") or [] if x) or "无"
         lines.append(f"- {text}")
-        lines.append(f"  - 信源：{source}｜原文：{refs}")
     lines.append("")
     return True
 
@@ -1433,30 +1510,25 @@ def append_ai_section_digest(
 def append_raw_message_flow(lines: list[str], items: list[dict[str, Any]]) -> None:
     lines.append("## 9. 原始消息流")
     lines.append("")
-    lines.append("按发布时间顺序保留本次收录消息原文；这里是完整信息池，不做删减。")
+    lines.append("按发布时间顺序保留本次收录消息原文。")
     lines.append("")
     if not items:
         lines.append("- 本轮暂无可解析原始消息。")
         lines.append("")
         return
     for item in items:
-        lines.append(f"### {item['serial']} {item.get('title') or '[无标题]'}")
+        title = " ".join(str(item.get("title") or "[无标题]").split())
+        content = " ".join(str(item.get("content") or "").split())
+        body = display_body_without_title(title=title, content=content)
+        meta = raw_message_meta_line(item)
+        lines.append(f"### {item['serial']}. {title}")
         lines.append("")
-        lines.append(f"- 时间：{item.get('date') or '未知'}")
-        lines.append(f"- 来源：{item.get('source') or '未知'}")
-        lines.append(f"- 类型：{item.get('type') or '未知'}")
-        lines.append(f"- 时间归类：`{item.get('bucket') or 'unknown'}`")
-        if item.get("entity"):
-            lines.append(f"- 相关实体：{item['entity']}")
-        if item.get("url"):
-            lines.append(f"- 原始链接：{item['url']}")
-        lines.append(f"- 所属栏目查询：`{item.get('entry_id') or ''}`")
-        lines.append("")
-        lines.append("原始消息全文：")
-        lines.append("")
-        lines.append("```text")
-        lines.append(str(item.get("content") or "[无 content 字段]"))
-        lines.append("```")
+        if body:
+            lines.append(body)
+            lines.append("")
+        if meta:
+            lines.append(f"> {meta}")
+            lines.append("")
         lines.append("")
 
 
@@ -1473,29 +1545,8 @@ def write_markdown_report(
     serial_by_item: dict[tuple[str, int, str, str], str],
     openclaw_digest: dict[str, Any],
 ) -> None:
-    date_label = run_started[:10]
     entries_by_id = {entry["id"]: entry for entry in entries}
-    total_items = sum(len(entry_items(entry)) for entry in entries)
-    total_counts = {
-        "in_window": 0,
-        "carryover": 0,
-        "undated": 0,
-        "future_or_clock_skew": 0,
-        "unwindowed": 0,
-    }
-    for entry in entries:
-        for key, value in ((entry.get("classification") or {}).get("counts") or {}).items():
-            if key in total_counts:
-                total_counts[key] += int(value or 0)
     lines: list[str] = []
-    lines.append(f"# {date_label} 市场信息浸泡日志")
-    lines.append("")
-    lines.append(
-        f"> {phase_label}｜窗口：{window.get('start') or '无'} 至 {window.get('end') or '无'}｜"
-        f"收录标题：{total_items}｜窗口内：{total_counts['in_window']}｜"
-        f"延续：{total_counts['carryover']}｜无时间：{total_counts['undated']}"
-    )
-    lines.append("")
 
     used_ids: set[str] = set()
     for prefix, title, entry_ids in REPORT_SECTIONS:
@@ -1650,6 +1701,27 @@ def publish_notion_page(
         return {"enabled": True, "attempted": False, "reason": f"missing {parent_env}"}
 
     title = report_path.stem.replace("_", " ") + f" - {phase_label}"
+    publication_key = f"{report_path.stem[:8]}:{phase}"
+    publication_state_path = report_path.parent / "notion_publications.json"
+    publication_state: dict[str, Any] = {}
+    if publication_state_path.exists():
+        try:
+            publication_state = json.loads(publication_state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            publication_state = {}
+    existing_publication = publication_state.get(publication_key)
+    if isinstance(existing_publication, dict) and existing_publication.get("page_id"):
+        return {
+            "enabled": True,
+            "attempted": True,
+            "skipped_duplicate": True,
+            "reason": "publication key already has a Notion page",
+            "publication_key": publication_key,
+            "page_id": existing_publication.get("page_id"),
+            "url": existing_publication.get("url"),
+            "title": existing_publication.get("title"),
+        }
+
     markdown = report_path.read_text(encoding="utf-8")
     blocks = markdown_to_notion_blocks(markdown)
     timeout = int(notion.get("timeout") or 120)
@@ -1678,13 +1750,30 @@ def publish_notion_page(
                 timeout=timeout,
                 payload={"children": blocks[i : i + 80]},
             )
+        state_write_error = None
+        publication_state[publication_key] = {
+            "page_id": page_id,
+            "url": page.get("url"),
+            "title": title,
+            "published_at": now_local().isoformat(timespec="seconds"),
+            "report_path": str(report_path),
+        }
+        try:
+            publication_state_path.write_text(
+                json.dumps(publication_state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:  # noqa: BLE001 - publishing already succeeded
+            state_write_error = str(exc)
         return {
             "enabled": True,
             "attempted": True,
             "started_at": started,
+            "publication_key": publication_key,
             "page_id": page_id,
             "url": page.get("url"),
             "block_count": len(blocks),
+            "state_write_error": state_write_error,
         }
     except Exception as exc:  # noqa: BLE001 - Notion delivery should not break collection
         return {
@@ -1955,6 +2044,25 @@ def main() -> int:
     latest_path.parent.mkdir(parents=True, exist_ok=True)
     latest_path.write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
 
+    failures = [e for e in entries if e["returncode"] != 0]
+    api_failures = [e for e in entries if not e["api_ok"]]
+    if failures or api_failures:
+        manifest["validation"] = {
+            "failures": [e["id"] for e in failures],
+            "api_failures": [e["id"] for e in api_failures],
+            "published": False,
+            "reason": "collection failed before publication",
+        }
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"report={report_path}")
+        print(f"manifest={manifest_path}")
+        print(f"entries={len(entries)}")
+        if failures:
+            print(f"failures={len(failures)}", file=sys.stderr)
+            return 2
+        print(f"api_failures={len(api_failures)}", file=sys.stderr)
+        return 3
+
     notion_delivery = publish_notion_page(
         config=config,
         env=env,
@@ -1962,14 +2070,21 @@ def main() -> int:
         phase_label=run_def["label"],
         report_path=report_path,
     )
-    delivery = deliver_report(
-        config=config,
-        phase=args.phase,
-        phase_label=run_def["label"],
-        report_path=report_path,
-        manifest_path=manifest_path,
-        notion_url=notion_delivery.get("url"),
-    )
+    if notion_delivery.get("skipped_duplicate"):
+        delivery = {
+            "enabled": (config.get("telegram") or {}).get("enabled", False),
+            "attempted": False,
+            "reason": "duplicate Notion publication skipped",
+        }
+    else:
+        delivery = deliver_report(
+            config=config,
+            phase=args.phase,
+            phase_label=run_def["label"],
+            report_path=report_path,
+            manifest_path=manifest_path,
+            notion_url=notion_delivery.get("url"),
+        )
     manifest["notion"] = notion_delivery
     manifest["delivery"] = delivery
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1979,14 +2094,6 @@ def main() -> int:
     print(f"entries={len(entries)}")
     if delivery.get("attempted"):
         print(f"delivery_returncode={delivery.get('returncode', 'exception')}")
-    failures = [e for e in entries if e["returncode"] != 0]
-    api_failures = [e for e in entries if not e["api_ok"]]
-    if failures:
-        print(f"failures={len(failures)}", file=sys.stderr)
-        return 2
-    if api_failures:
-        print(f"api_failures={len(api_failures)}", file=sys.stderr)
-        return 3
     notion_config = config.get("notion") or {}
     if args.phase != "smoke" and notion_config.get("enabled"):
         if not notion_delivery.get("attempted") or notion_delivery.get("error"):
