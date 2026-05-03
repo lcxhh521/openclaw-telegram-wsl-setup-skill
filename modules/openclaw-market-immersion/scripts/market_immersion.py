@@ -217,7 +217,96 @@ def duplicate_keys_for_item(item: dict[str, Any]) -> list[str]:
         normalized = normalize_for_duplicate(value)
         if len(normalized) >= 12 and normalized not in keys:
             keys.append(normalized)
+    for key in content_fingerprint_keys(item):
+        if key not in keys:
+            keys.append(key)
     return keys
+
+
+def duplicate_ngrams(text: str, *, n: int = 3, limit: int = 360) -> set[str]:
+    normalized = normalize_for_duplicate(text, limit=limit)
+    if len(normalized) < n:
+        return {normalized} if normalized else set()
+    return {normalized[i : i + n] for i in range(0, len(normalized) - n + 1)}
+
+
+def jaccard_similarity(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def number_tokens(text: str) -> set[str]:
+    return set(re.findall(r"\d+(?:\.\d+)?%?", str(text or "")))
+
+
+def entity_like_terms(text: str) -> set[str]:
+    pattern = (
+        r"[\u4e00-\u9fffA-Za-z0-9]{2,24}(?:集团|公司|银行|证券|基金|交易所|委员会|管理局|"
+        r"部门|组织|机构|口岸|海峡|隧道|机场|铁路|高速|景区|油田|油轮|法案|指数|学校|单位|省|市)"
+    )
+    return set(re.findall(pattern, str(text or "")))
+
+
+def content_fingerprint_keys(item: dict[str, Any]) -> list[str]:
+    title = str(item.get("title") or "")
+    content = str(item.get("content") or "")
+    normalized = normalize_for_duplicate(content, limit=500)
+    if len(normalized) < 40:
+        return []
+    numbers = sorted(number_tokens(title + content))[:8]
+    entities = sorted(entity_like_terms(title + content))[:6]
+    keys: list[str] = []
+    if numbers and entities:
+        raw = "num_entity:" + "|".join(numbers) + "|" + "|".join(entities)
+        keys.append(hashlib.sha1(raw.encode("utf-8")).hexdigest())
+    prefix = normalized[:80]
+    if len(prefix) >= 40:
+        keys.append(hashlib.sha1(("body_prefix:" + prefix).encode("utf-8")).hexdigest())
+    return keys
+
+
+def numbers_compatible(left: set[str], right: set[str]) -> bool:
+    if not left or not right:
+        return True
+    overlap = left & right
+    return bool(overlap) and len(overlap) / min(len(left), len(right)) >= 0.5
+
+
+def content_overlap_duplicate(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
+    existing_title = str(existing.get("title") or "")
+    incoming_title = str(incoming.get("title") or "")
+    existing_content = str(existing.get("content") or "")
+    incoming_content = str(incoming.get("content") or "")
+    existing_body = normalize_for_duplicate(existing_content, limit=500)
+    incoming_body = normalize_for_duplicate(incoming_content, limit=500)
+    if len(existing_body) < 24 or len(incoming_body) < 24:
+        return False
+
+    title_similarity = jaccard_similarity(
+        duplicate_ngrams(existing_title, n=2, limit=120),
+        duplicate_ngrams(incoming_title, n=2, limit=120),
+    )
+    body_similarity = jaccard_similarity(
+        duplicate_ngrams(existing_content, n=3, limit=500),
+        duplicate_ngrams(incoming_content, n=3, limit=500),
+    )
+    number_support = numbers_compatible(
+        number_tokens(existing_title + existing_content),
+        number_tokens(incoming_title + incoming_content),
+    )
+    shorter, longer = sorted((existing_body, incoming_body), key=len)
+    containment = len(shorter) >= 40 and shorter in longer
+
+    if containment and (title_similarity >= 0.25 or number_support):
+        return True
+    if body_similarity >= 0.72 and number_support:
+        return True
+    if body_similarity >= 0.55 and title_similarity >= 0.35 and number_support:
+        return True
+    if title_similarity >= 0.82 and body_similarity >= 0.32 and number_support:
+        return True
+    return False
 
 
 def source_priority(source: str) -> int:
@@ -239,11 +328,7 @@ def item_richness_score(item: dict[str, Any]) -> int:
     quality = item.get("content_quality") or content_quality(title=title, content=content)
     quality_bonus = {"body": 1000, "title_like": 120, "title_only": 0, "missing": -200}.get(str(quality), 0)
     detail_bonus = min(len(re.findall(r"\d+(?:\.\d+)?%?", content)) * 20, 200)
-    entity_patterns = (
-        r"[\u4e00-\u9fffA-Za-z0-9]{2,24}(?:集团|公司|银行|证券|基金|交易所|委员会|管理局|"
-        r"部门|组织|机构|口岸|海峡|隧道|机场|铁路|高速|景区|油田|油轮|法案|指数)"
-    )
-    entity_bonus = (120 if entity else 0) + min(len(re.findall(entity_patterns, title + content)) * 15, 180)
+    entity_bonus = (120 if entity else 0) + min(len(entity_like_terms(title + content)) * 15, 180)
     punctuation_bonus = min(content.count("，") + content.count("。") + content.count("；"), 30) * 4
     url_bonus = 80 if item.get("url") else 0
     return (
@@ -1301,6 +1386,15 @@ def build_report_items(
             keys = duplicate_keys_for_item(copied)
             existing = next((key_to_item[key] for key in keys if key in key_to_item), None)
             if existing is None:
+                existing = next(
+                    (
+                        item
+                        for item in all_items
+                        if content_overlap_duplicate(item, copied)
+                    ),
+                    None,
+                )
+            if existing is None:
                 all_items.append(copied)
                 for key in keys:
                     key_to_item[key] = copied
@@ -1308,7 +1402,7 @@ def build_report_items(
                 continue
 
             merge_duplicate_item(existing, copied)
-            for key in keys:
+            for key in set(keys + duplicate_keys_for_item(existing)):
                 key_to_item[key] = existing
             identity_to_item[item_identity(copied)] = existing
 
