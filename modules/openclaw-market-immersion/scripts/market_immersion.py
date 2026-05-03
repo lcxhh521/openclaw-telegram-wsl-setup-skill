@@ -1170,27 +1170,6 @@ def classify_items(
     return {"counts": counts, "items": classified}
 
 
-REPORT_SECTIONS: list[tuple[str, str, set[str]]] = [
-    ("1.", "今日市场总览", {"market_overview", "overnight_watch", "smoke_market"}),
-    ("2.", "高频主题/板块", {"industry_themes", "midday_topics", "daily_repeated_terms"}),
-    (
-        "3.",
-        "公司公告与事件",
-        {
-            "announcements",
-            "midday_announcements",
-            "after_close_announcements",
-            "tomorrow_calendar",
-        },
-    ),
-    ("4.", "研报/机构观点", {"research_views", "after_close_research"}),
-    ("5.", "政策与宏观信息", {"macro_policy", "global_china_assets"}),
-    ("6.", "异动股票/板块", {"midday_market", "close_review"}),
-    ("7.", "自选股相关信息", {"watchlist_related"}),
-    ("8.", "未归类信息", set()),
-]
-
-
 def entry_status(entry: dict[str, Any]) -> str:
     if entry["returncode"] != 0:
         return f"FAILED({entry['returncode']})"
@@ -1343,28 +1322,26 @@ def build_openclaw_summary_prompt(
     all_items: list[dict[str, Any]],
     max_item_chars: int,
 ) -> str:
-    section_titles = [title for _, title, _ in REPORT_SECTIONS]
     payload_items = build_openclaw_payload_items(
         all_items=all_items,
         max_item_chars=max_item_chars,
     )
     return (
         "你是市场信息浸泡日报的轻整理层。任务不是投研判断，也不是交易建议。\n"
-        "请基于原始消息，按栏目生成保持原意的轻度整理文本。\n"
+        "请基于原始消息，生成一段前后连贯、逻辑清晰的中文信息汇总。\n"
         "规则：\n"
         "1. 只整理事实和消息含义，不预测涨跌，不给买卖建议。\n"
-        "2. 1-7栏目只输出轻整理后的中文文本、信源、原文编号；不要输出状态、时间归类、信息类型等工程字段。\n"
+        "2. 不要按栏目拆分，不要写编号列表，不要输出信源、原文编号、状态、时间归类、信息类型等工程字段。\n"
         "3. 输入里的 content 是正文材料；title 只作为判断归类的辅助证据。content_quality 为 title_only/title_like 的消息要当作短快讯，不要扩写成不存在的正文。\n"
         "4. 只有当时间是消息报道的事件时间、截止时间、会议时间、披露时间等内容本身的一部分时，才写入整理正文。\n"
-        "5. 不能归入前7个明确栏目的消息，放入“未归类信息”并同样轻整理；不要因为未归类就忽略。\n"
+        "5. 对重复、同主题、跨信源的信息要合并表达，保留核心事实和重要差异，不要反复写同一句。\n"
         "6. 不要丢掉重要分歧和风险表述；遇到情绪化或观点化消息，要保留其观点属性，不把它写成事实。\n"
-        "7. 每条整理文本 40-120 个中文字符；可合并同主题多条消息，但 refs 必须列出对应原文编号。\n"
+        "7. 汇总部分写成 2-5 个自然段，每段 120-260 个中文字符；段落之间要有承接关系，像日报正文，不像摘抄清单。\n"
         "8. 返回严格 JSON，不要 Markdown，不要代码块。\n"
         "JSON 格式：\n"
-        '{"sections":{"今日市场总览":[{"text":"...","source":"...","refs":["1"]}],"未归类信息":[{"text":"...","source":"...","refs":["2"]}]},"observation":{"repeated_words":["..."],"multi_day_themes":["..."],"watch_next":["..."]}}\n'
+        '{"summary_paragraphs":["...","..."],"observation":{"repeated_words":["..."],"multi_day_themes":["..."],"watch_next":["..."]}}\n'
         f"阶段：{phase_label}\n"
         f"窗口：{window.get('start') or '无'} 至 {window.get('end') or '无'}\n"
-        f"栏目：{json.dumps(section_titles, ensure_ascii=False)}\n"
         "原始消息：\n"
         f"{json.dumps(payload_items, ensure_ascii=False)}"
     )
@@ -1410,7 +1387,6 @@ def build_openclaw_chunked_messages(
     max_item_chars: int,
     chunk_chars: int,
 ) -> list[str]:
-    section_titles = [title for _, title, _ in REPORT_SECTIONS]
     payload_items = build_openclaw_payload_items(
         all_items=all_items,
         max_item_chars=max_item_chars,
@@ -1421,15 +1397,13 @@ def build_openclaw_chunked_messages(
         (
             "你是市场信息浸泡日报的轻整理层。任务不是投研判断，也不是交易建议。\n"
             "接下来我会分片发送原始消息 JSON。请先只确认已接收，不要生成日报。\n"
-            "最终要求：按栏目生成保持原意的轻整理文本；1-7只输出整理后的中文文本、信源、原文编号；"
+            "最终要求：生成一段前后连贯、逻辑清晰的中文信息汇总；不要按栏目拆分，不要写编号列表；"
             "输入里的content是正文材料，title只作归类辅助；content_quality为title_only/title_like的消息按短快讯处理，不要扩写；"
-            "只有事件时间本身才可写入正文；不能归入前7栏的放入“未归类信息”；返回严格 JSON，不要 Markdown。\n"
-            'JSON格式：{"sections":{"今日市场总览":[{"text":"...","source":"...","refs":["1"]}],'
-            '"未归类信息":[{"text":"...","source":"...","refs":["2"]}]},"observation":'
+            "只有事件时间本身才可写入正文；重复和同主题信息要合并表达；返回严格 JSON，不要 Markdown。\n"
+            'JSON格式：{"summary_paragraphs":["...","..."],"observation":'
             '{"repeated_words":["..."],"multi_day_themes":["..."],"watch_next":["..."]}}\n'
             f"阶段：{phase_label}\n"
             f"窗口：{window.get('start') or '无'} 至 {window.get('end') or '无'}\n"
-            f"栏目：{json.dumps(section_titles, ensure_ascii=False)}\n"
             f"原始消息总数：{len(payload_items)}，分片数：{len(chunks)}"
         )
     ]
@@ -1529,6 +1503,7 @@ def generate_openclaw_digest(
                 "attempted": True,
                 "started_at": started,
                 "attempts": attempt,
+                "summary_paragraphs": normalize_summary_paragraphs(digest),
                 "sections": digest.get("sections") or {},
                 "observation": digest.get("observation") or {},
                 "usage": (data.get("meta") or {}).get("agentMeta", {}).get("usage"),
@@ -1545,51 +1520,65 @@ def generate_openclaw_digest(
     }
 
 
-def append_section_digest(
+def normalize_summary_paragraphs(digest: dict[str, Any]) -> list[str]:
+    paragraphs = digest.get("summary_paragraphs")
+    if isinstance(paragraphs, str):
+        paragraphs = [paragraphs]
+    if isinstance(paragraphs, list):
+        cleaned = [" ".join(str(text).split()) for text in paragraphs if str(text).strip()]
+        if cleaned:
+            return cleaned
+
+    summary = digest.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        return [part.strip() for part in re.split(r"\n{2,}", summary) if part.strip()]
+
+    sections = digest.get("sections") or {}
+    if isinstance(sections, dict):
+        flattened: list[str] = []
+        for rows in sections.values():
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict):
+                    text = " ".join(str(row.get("text") or "").split())
+                    if text:
+                        flattened.append(text)
+                elif str(row).strip():
+                    flattened.append(" ".join(str(row).split()))
+        if flattened:
+            return ["。".join(text.rstrip("。") for text in flattened[:8]) + "。"]
+    return []
+
+
+def append_summary_digest(
     lines: list[str],
-    entry: dict[str, Any],
-    serial_by_item: dict[tuple[str, int, str, str], str],
-) -> None:
-    items = sorted(entry_items(entry), key=item_sort_key)
-    if items:
-        for item in items:
-            lines.append(f"- {summary_sentence(item)}")
-        lines.append("")
-    else:
-        lines.append("- 本轮暂无可整理信息。")
-        lines.append("")
-
-    if entry["api_messages"]:
-        lines.append("- API 提示：")
-        for message in entry["api_messages"]:
-            lines.append(f"  - `{message}`")
-        lines.append("")
-
-
-def append_ai_section_digest(
-    lines: list[str],
-    title: str,
     openclaw_digest: dict[str, Any],
-) -> bool:
-    sections = openclaw_digest.get("sections") or {}
-    rows = sections.get(title) or []
-    if not rows:
-        return False
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        text = " ".join(str(row.get("text") or "").split())
-        if not text:
-            continue
-        lines.append(f"- {text}")
+    all_items: list[dict[str, Any]],
+) -> None:
+    lines.append("## 信息汇总")
     lines.append("")
-    return True
+
+    paragraphs = openclaw_digest.get("summary_paragraphs") or []
+    if isinstance(paragraphs, str):
+        paragraphs = [paragraphs]
+    cleaned = [" ".join(str(text).split()) for text in paragraphs if str(text).strip()]
+    if not cleaned:
+        fallback_sentences = [summary_sentence(item).rstrip("。") for item in all_items[:8]]
+        cleaned = ["。".join(sentence for sentence in fallback_sentences if sentence) + "。"] if fallback_sentences else []
+
+    if not cleaned:
+        lines.append("本轮暂无可整理信息。")
+        lines.append("")
+        return
+
+    for paragraph in cleaned:
+        lines.append(paragraph)
+        lines.append("")
 
 
 def append_raw_message_flow(lines: list[str], items: list[dict[str, Any]]) -> None:
-    lines.append("## 9. 原始消息流")
-    lines.append("")
-    lines.append("按发布时间顺序保留本次收录消息原文。")
+    lines.append("## 原始消息流")
     lines.append("")
     if not items:
         lines.append("- 本轮暂无可解析原始消息。")
@@ -1606,7 +1595,7 @@ def append_raw_message_flow(lines: list[str], items: list[dict[str, Any]]) -> No
             lines.append(body)
             lines.append("")
         if meta:
-            lines.append(f"> {meta}")
+            lines.append(f"{meta}")
             lines.append("")
         lines.append("")
 
@@ -1624,43 +1613,10 @@ def write_markdown_report(
     serial_by_item: dict[tuple[str, int, str, str], str],
     openclaw_digest: dict[str, Any],
 ) -> None:
-    entries_by_id = {entry["id"]: entry for entry in entries}
     lines: list[str] = []
 
-    used_ids: set[str] = set()
-    for prefix, title, entry_ids in REPORT_SECTIONS:
-        lines.append(f"## {prefix} {title}")
-        lines.append("")
-        if append_ai_section_digest(lines, title, openclaw_digest):
-            continue
-        section_entries = [entries_by_id[entry_id] for entry_id in entry_ids if entry_id in entries_by_id]
-        if not section_entries:
-            lines.append("- 本轮暂无该栏目对应信息。")
-            lines.append("")
-            continue
-        for entry in section_entries:
-            used_ids.add(entry["id"])
-            append_section_digest(lines, entry, serial_by_item)
-
+    append_summary_digest(lines, openclaw_digest, all_items)
     append_raw_message_flow(lines, all_items)
-
-    lines.append("## 观察备忘")
-    lines.append("")
-    lines.append("仅记录，不做交易建议：")
-    observation = openclaw_digest.get("observation") or {}
-    repeated_words = "、".join(str(x) for x in observation.get("repeated_words") or [] if x)
-    multi_day_themes = "、".join(str(x) for x in observation.get("multi_day_themes") or [] if x)
-    watch_next = "、".join(str(x) for x in observation.get("watch_next") or [] if x)
-    lines.append(f"- 今日反复出现的词：{repeated_words}")
-    lines.append(f"- 连续多日出现的主题：{multi_day_themes}")
-    lines.append(f"- 值得明天继续观察的线索：{watch_next}")
-    lines.append("")
-    lines.append("## 本机复盘索引")
-    lines.append("")
-    lines.append(f"- manifest: `{manifest_path}`")
-    lines.append(f"- window_source: `{window.get('source') or ''}`")
-    lines.append("- raw JSON / stdout / stderr 已保留在本机 market-immersion 归档目录。")
-    lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -1756,6 +1712,23 @@ def notion_request(
         raise RuntimeError(f"Notion API {exc.code}: {details}") from exc
 
 
+def report_title_for_phase(*, report_path: Path, phase: str, phase_label: str) -> str:
+    date_token = report_path.stem[:8]
+    try:
+        date_label = dt.datetime.strptime(date_token, "%Y%m%d").strftime("%Y年%m月%d日")
+    except ValueError:
+        date_label = date_token
+    names = {
+        "morning": "晨报",
+        "midday": "午报",
+        "close": "收盘报",
+        "night": "晚报",
+    }
+    if phase == "smoke":
+        return f"{date_label}测试日报"
+    return f"{date_label}{names.get(phase, phase_label)}"
+
+
 def publish_notion_page(
     *,
     config: dict[str, Any],
@@ -1779,7 +1752,7 @@ def publish_notion_page(
     if not parent_page_id:
         return {"enabled": True, "attempted": False, "reason": f"missing {parent_env}"}
 
-    title = report_path.stem.replace("_", " ") + f" - {phase_label}"
+    title = report_title_for_phase(report_path=report_path, phase=phase, phase_label=phase_label)
     publication_key = f"{report_path.stem[:8]}:{phase}"
     publication_state_path = report_path.parent / "notion_publications.json"
     publication_state: dict[str, Any] = {}
@@ -2098,10 +2071,10 @@ def main() -> int:
         and all_items
         and (
             openclaw_digest.get("error")
-            or not (openclaw_digest.get("sections") or {})
+            or not (openclaw_digest.get("summary_paragraphs") or [])
         )
     ):
-        print(f"openclaw_summary_failed={openclaw_digest.get('error') or 'empty sections'}", file=sys.stderr)
+        print(f"openclaw_summary_failed={openclaw_digest.get('error') or 'empty summary'}", file=sys.stderr)
         print(f"manifest={manifest_path}")
         return 4
 
