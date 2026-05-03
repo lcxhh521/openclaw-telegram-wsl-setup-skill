@@ -60,7 +60,14 @@ journalctl --user -u openclaw-market-immersion-morning.service -n 100 --no-pager
 
 ## 人民日报深读
 
-人民日报深读是独立于快讯日报的长文本模块。它不从 PDF 强行抽正文，而是保留 PDF 作为原始版面，同时从电子版文章页抽取完整正文，生成“原文 / 解析”对照页。
+人民日报深读是独立于快讯日报的长文本子流程，但封装在同一个模块里。它复刻手工整理 Notion 的流程：
+
+1. 抓取当天 8 个版面的电子版、PDF 和文章正文。
+2. 在 Notion 的 `财经政经 / 人民日报 / 某年某月某日` 下生成日期页。
+3. 日期页按版面列出文章，每篇文章下面创建深读子页。
+4. 前 4 版文章默认生成逐段解读和全文深度解读。
+5. 版务、责编、版式设计等非正文条目自动过滤。
+6. 用 `people_daily_publications.json` 记录已发布日期，避免重复创建。
 
 ```bash
 ~/.openclaw/workspace/market-immersion-module/scripts/run_people_daily_deep_read.sh \
@@ -72,7 +79,8 @@ journalctl --user -u openclaw-market-immersion-morning.service -n 100 --no-pager
 - `--date YYYY-MM-DD`：按日期从第01版开始抓取。
 - `--max-pages 1`：只抓前 N 个版面，适合测试。
 - `--delay 120`：自动请求间隔，默认尊重人民网 robots 的 crawl-delay。
-- `--analysis template`：生成基础阅读骨架。
-- `--analysis openclaw`：调用 OpenClaw 逐篇生成深度解析。
+- `--manifest PATH`：使用已抓取的 manifest 重新发布或测试。
+- `--dry-run`：只验证将要生成的 Notion 页面数量，不真正发布。
+- `--force`：归档旧日期页并重建，默认不会重复创建同一天页面。
 
-输出目录默认是 `~/.openclaw/workspace/people-daily-deep-read/YYYY-MM-DD/`，包含 `manifest.json`、PDF 原件、Markdown 归档，以及一个本地 HTML 对照页。
+输出目录默认是 `~/.openclaw/workspace/people-daily-deep-read/YYYY-MM-DD/`，包含 `manifest.json`、PDF 原件、Markdown 归档，以及一个本地 HTML 对照页。正式发布时会调用 OpenClaw 为每篇深读文章生成逐段解析，Notion 子页采用“原文定位短摘 + 解析”的结构；完整正文保留官方原文入口和 PDF 版面对照。

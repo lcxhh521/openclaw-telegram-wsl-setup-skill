@@ -1,0 +1,10 @@
+[Unit]
+Description=Run OpenClaw People's Daily deep read daily
+
+[Timer]
+OnCalendar=*-*-* 08:30:00
+Persistent=true
+Unit=openclaw-people-daily-deep-read.service
+
+[Install]
+WantedBy=timers.target
