@@ -232,6 +232,31 @@ def source_priority(source: str) -> int:
     return priorities.get(source, 0)
 
 
+def item_richness_score(item: dict[str, Any]) -> int:
+    title = " ".join(str(item.get("title") or "").split())
+    content = " ".join(str(item.get("content") or "").split())
+    entity = " ".join(str(item.get("entity") or "").split())
+    quality = item.get("content_quality") or content_quality(title=title, content=content)
+    quality_bonus = {"body": 1000, "title_like": 120, "title_only": 0, "missing": -200}.get(str(quality), 0)
+    detail_bonus = min(len(re.findall(r"\d+(?:\.\d+)?%?", content)) * 20, 200)
+    entity_patterns = (
+        r"[\u4e00-\u9fffA-Za-z0-9]{2,24}(?:集团|公司|银行|证券|基金|交易所|委员会|管理局|"
+        r"部门|组织|机构|口岸|海峡|隧道|机场|铁路|高速|景区|油田|油轮|法案|指数)"
+    )
+    entity_bonus = (120 if entity else 0) + min(len(re.findall(entity_patterns, title + content)) * 15, 180)
+    punctuation_bonus = min(content.count("，") + content.count("。") + content.count("；"), 30) * 4
+    url_bonus = 80 if item.get("url") else 0
+    return (
+        len(content)
+        + quality_bonus
+        + detail_bonus
+        + entity_bonus
+        + punctuation_bonus
+        + url_bonus
+        + source_priority(str(item.get("source") or "")) * 10
+    )
+
+
 def merge_duplicate_item(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     sources = list(existing.get("duplicate_sources") or [existing.get("source") or "未知"])
     source = str(incoming.get("source") or "未知")
@@ -240,12 +265,7 @@ def merge_duplicate_item(existing: dict[str, Any], incoming: dict[str, Any]) -> 
     existing["duplicate_sources"] = sources
     existing["duplicate_count"] = int(existing.get("duplicate_count") or 1) + 1
 
-    existing_content = str(existing.get("content") or "")
-    incoming_content = str(incoming.get("content") or "")
-    if len(incoming_content) > len(existing_content) + 12 or (
-        len(incoming_content) >= len(existing_content)
-        and source_priority(source) > source_priority(str(existing.get("source") or ""))
-    ):
+    if item_richness_score(incoming) > item_richness_score(existing):
         for key in ("title", "content", "content_quality", "date", "source", "type", "entity", "url", "raw_file", "bucket", "parsed_at", "entry_id"):
             if incoming.get(key):
                 existing[key] = incoming[key]
@@ -1327,17 +1347,20 @@ def build_openclaw_summary_prompt(
         max_item_chars=max_item_chars,
     )
     return (
-        "你是市场信息浸泡日报的轻整理层。任务不是投研判断，也不是交易建议。\n"
-        "请基于原始消息，生成一段前后连贯、逻辑清晰的中文信息汇总。\n"
+        "你是财经信息日报编辑。任务不是投研判断，也不是交易建议，而是把原始信息压缩成有细节、有主线、有洞察的高密度综述。\n"
+        "请基于原始消息，生成前后连贯、逻辑清晰的中文信息汇总。\n"
         "规则：\n"
         "1. 只整理事实和消息含义，不预测涨跌，不给买卖建议。\n"
         "2. 不要按栏目拆分，不要写编号列表，不要输出信源、原文编号、状态、时间归类、信息类型等工程字段。\n"
         "3. 输入里的 content 是正文材料；title 只作为判断归类的辅助证据。content_quality 为 title_only/title_like 的消息要当作短快讯，不要扩写成不存在的正文。\n"
         "4. 只有当时间是消息报道的事件时间、截止时间、会议时间、披露时间等内容本身的一部分时，才写入整理正文。\n"
-        "5. 对重复、同主题、跨信源的信息要合并表达，保留核心事实和重要差异，不要反复写同一句。\n"
-        "6. 不要丢掉重要分歧和风险表述；遇到情绪化或观点化消息，要保留其观点属性，不把它写成事实。\n"
-        "7. 汇总部分写成 2-5 个自然段，每段 120-260 个中文字符；段落之间要有承接关系，像日报正文，不像摘抄清单。\n"
-        "8. 返回严格 JSON，不要 Markdown，不要代码块。\n"
+        "5. 每段都必须包含具体主体、关键数字或明确事件细节；不能只写“热度较高、值得关注、提供线索、存在扰动”这类空话。\n"
+        "6. 对重复、同主题、跨信源的信息要合并表达，写出它们之间的关系：是互相印证、边际变化、分歧，还是同一事件的不同侧面。\n"
+        "7. 必须保留重要分歧和风险表述；遇到情绪化或观点化消息，要保留其观点属性，不把它写成事实。\n"
+        "8. 需要有轻度洞察：说明这批信息共同指向什么变化、哪些信息是新增边际、哪些仍只是噪声或待确认信号。\n"
+        "9. 汇总部分写成 3-5 个自然段，每段 160-320 个中文字符；段落之间要有承接关系，像编辑写的日报正文，不像摘要拼接。\n"
+        "10. 禁止使用空泛收尾句，例如“后续值得关注”“整体来看”“提供线索”“需要继续观察”；如需写观察点，必须附带具体触发条件或待验证事实。\n"
+        "11. 返回严格 JSON，不要 Markdown，不要代码块。\n"
         "JSON 格式：\n"
         '{"summary_paragraphs":["...","..."],"observation":{"repeated_words":["..."],"multi_day_themes":["..."],"watch_next":["..."]}}\n'
         f"阶段：{phase_label}\n"
@@ -1398,11 +1421,13 @@ def build_openclaw_chunked_messages(
     chunks = chunk_text(payload_text, chunk_chars)
     messages = [
         (
-            "你是市场信息浸泡日报的轻整理层。任务不是投研判断，也不是交易建议。\n"
+            "你是财经信息日报编辑。任务不是投研判断，也不是交易建议，而是把原始信息压缩成有细节、有主线、有洞察的高密度综述。\n"
             "接下来我会分片发送原始消息 JSON。请先只确认已接收，不要生成日报。\n"
-            "最终要求：生成一段前后连贯、逻辑清晰的中文信息汇总；不要按栏目拆分，不要写编号列表；"
+            "最终要求：生成前后连贯、逻辑清晰的中文信息汇总；不要按栏目拆分，不要写编号列表；"
             "输入里的content是正文材料，title只作归类辅助；content_quality为title_only/title_like的消息按短快讯处理，不要扩写；"
-            "只有事件时间本身才可写入正文；重复和同主题信息要合并表达；返回严格 JSON，不要 Markdown。\n"
+            "每段必须包含具体主体、关键数字或明确事件细节；重复和同主题信息要合并出互相印证、边际变化、分歧或同一事件不同侧面；"
+            "必须写出这批信息共同指向什么变化、哪些是新增边际、哪些仍只是噪声或待确认信号；"
+            "禁止空泛收尾句，例如“后续值得关注”“整体来看”“提供线索”“需要继续观察”；返回严格 JSON，不要 Markdown。\n"
             'JSON格式：{"summary_paragraphs":["...","..."],"observation":'
             '{"repeated_words":["..."],"multi_day_themes":["..."],"watch_next":["..."]}}\n'
             f"阶段：{phase_label}\n"
@@ -1415,6 +1440,7 @@ def build_openclaw_chunked_messages(
     messages.append(
         "以上原始消息已经发送完毕。现在请根据全部分片生成最终 JSON。"
         "只返回 JSON 对象，不要 Markdown，不要代码块。"
+        "质量要求：3-5 个自然段，每段 160-320 个中文字符；每段至少包含两个具体事实颗粒，不能写空泛综述。"
     )
     return messages
 
@@ -1501,12 +1527,19 @@ def generate_openclaw_digest(
                 if isinstance(payload, dict)
             )
             digest = extract_json_object(text)
+            summary_paragraphs = normalize_summary_paragraphs(digest)
+            quality_warnings = summary_quality_warnings(summary_paragraphs, all_items)
+            if quality_warnings and attempt < retries:
+                last_error = "low quality summary: " + "; ".join(quality_warnings)
+                time.sleep(5)
+                continue
             return {
                 "enabled": True,
                 "attempted": True,
                 "started_at": started,
                 "attempts": attempt,
-                "summary_paragraphs": normalize_summary_paragraphs(digest),
+                "summary_paragraphs": summary_paragraphs,
+                "quality_warnings": quality_warnings,
                 "sections": digest.get("sections") or {},
                 "observation": digest.get("observation") or {},
                 "usage": (data.get("meta") or {}).get("agentMeta", {}).get("usage"),
@@ -1552,6 +1585,48 @@ def normalize_summary_paragraphs(digest: dict[str, Any]) -> list[str]:
         if flattened:
             return ["。".join(text.rstrip("。") for text in flattened[:8]) + "。"]
     return []
+
+
+def summary_quality_warnings(paragraphs: list[str], all_items: list[dict[str, Any]]) -> list[str]:
+    if not paragraphs:
+        return ["empty summary"]
+
+    text = "".join(paragraphs)
+    warnings: list[str] = []
+    if len(all_items) >= 8 and len(text) < 480:
+        warnings.append("summary too short for item volume")
+    if len(all_items) >= 8 and not re.search(r"\d", text):
+        warnings.append("summary has no numeric detail")
+
+    generic_phrases = [
+        "整体来看",
+        "总体来看",
+        "值得关注",
+        "后续关注",
+        "继续观察",
+        "提供线索",
+        "存在扰动",
+        "需要放在",
+        "同一背景",
+        "不适合拆成",
+    ]
+    generic_hits = [phrase for phrase in generic_phrases if phrase in text]
+    if len(generic_hits) >= 3:
+        warnings.append("summary uses too many generic phrases: " + "、".join(generic_hits[:5]))
+
+    detail_terms: set[str] = set()
+    for item in all_items[:80]:
+        source = str(item.get("source") or "").strip()
+        if source:
+            detail_terms.add(source)
+        title = str(item.get("title") or "")
+        for term in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{3,12}", title):
+            if len(term) >= 3 and not term.isdigit():
+                detail_terms.add(term)
+    concrete_hits = sum(1 for term in detail_terms if term and term in text)
+    if len(all_items) >= 12 and concrete_hits < 4:
+        warnings.append("summary mentions too few concrete names")
+    return warnings
 
 
 def append_summary_digest(
