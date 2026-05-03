@@ -176,6 +176,8 @@ modules/openclaw-market-immersion/
 - 只有采集、OpenClaw 轻整理和用户启用的发布步骤都成功时，才把这一轮视为成功。
 - 如果机器关机、WSL 未启动或网络中断，依靠 `systemd --user` timer 的 `Persistent=yes` 和 service retry 尽量在恢复后补跑。
 
+当前默认时间点是：09:05 晨报、12:15 午报、15:20 收盘后、22:10 晚报。Notion 页面总标题使用“每日快讯简报”，正式阶段会先检查同一父页面下是否已经存在同名日期/阶段页面，避免补跑时重复发布。Telegram 默认只推送 Notion 链接，不再强制附带 Markdown 文件；只有用户把 `telegram.send_mode` 改成 `document` 或 `media` 时，才会发送附件。
+
 日报默认结构是：
 
 ```text
