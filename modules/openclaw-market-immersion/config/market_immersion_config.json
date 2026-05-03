@@ -23,7 +23,7 @@
     "thinking": "low",
     "timeout": 300,
     "retries": 3,
-    "max_item_chars": 500,
+    "max_item_chars": 0,
     "max_message_chars": 60000
   },
   "eastmoney_feed": {

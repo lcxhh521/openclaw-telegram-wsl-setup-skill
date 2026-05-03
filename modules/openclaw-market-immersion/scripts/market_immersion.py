@@ -1354,6 +1354,9 @@ def build_openclaw_payload_items(
 ) -> list[dict[str, Any]]:
     payload_items = []
     for item in all_items:
+        content = " ".join(str(item.get("content") or "").split())
+        if max_item_chars > 0:
+            content = short_text(content, max_item_chars)
         payload_items.append(
             {
                 "serial": item.get("serial"),
@@ -1365,9 +1368,9 @@ def build_openclaw_payload_items(
                 "bucket": item.get("bucket"),
                 "content_quality": item.get("content_quality") or content_quality(
                     title=str(item.get("title") or ""),
-                    content=str(item.get("content") or ""),
+                    content=content,
                 ),
-                "content": short_text(str(item.get("content") or ""), max_item_chars),
+                "content": content,
             }
         )
     return payload_items
@@ -1438,7 +1441,7 @@ def generate_openclaw_digest(
         phase_label=phase_label,
         window=window,
         all_items=all_items,
-        max_item_chars=int(summary_config.get("max_item_chars") or 1200),
+        max_item_chars=int(summary_config.get("max_item_chars") or 0),
     )
     started = now_local().isoformat(timespec="seconds")
     retries = int(summary_config.get("retries") or 3)
@@ -1468,7 +1471,7 @@ def generate_openclaw_digest(
                 phase_label=phase_label,
                 window=window,
                 all_items=all_items,
-                max_item_chars=int(summary_config.get("max_item_chars") or 1200),
+                max_item_chars=int(summary_config.get("max_item_chars") or 0),
                 chunk_chars=max_message_chars,
             )
         completed = None
