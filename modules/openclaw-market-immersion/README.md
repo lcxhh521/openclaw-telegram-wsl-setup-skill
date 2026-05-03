@@ -57,3 +57,22 @@ systemctl --user list-timers "openclaw-market-immersion*" --all
 ```bash
 journalctl --user -u openclaw-market-immersion-morning.service -n 100 --no-pager
 ```
+
+## 人民日报深读
+
+人民日报深读是独立于快讯日报的长文本模块。它不从 PDF 强行抽正文，而是保留 PDF 作为原始版面，同时从电子版文章页抽取完整正文，生成“原文 / 解析”对照页。
+
+```bash
+~/.openclaw/workspace/market-immersion-module/scripts/run_people_daily_deep_read.sh \
+  --layout-url "https://paper.people.com.cn/rmrb/pc/layout/202605/03/node_01.html"
+```
+
+常用参数：
+
+- `--date YYYY-MM-DD`：按日期从第01版开始抓取。
+- `--max-pages 1`：只抓前 N 个版面，适合测试。
+- `--delay 120`：自动请求间隔，默认尊重人民网 robots 的 crawl-delay。
+- `--analysis template`：生成基础阅读骨架。
+- `--analysis openclaw`：调用 OpenClaw 逐篇生成深度解析。
+
+输出目录默认是 `~/.openclaw/workspace/people-daily-deep-read/YYYY-MM-DD/`，包含 `manifest.json`、PDF 原件、Markdown 归档，以及一个本地 HTML 对照页。

@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "description": "Scheduled market information immersion collector and Notion publisher for OpenClaw.",
   "entrypoint": "scripts/run_market_immersion.sh",
+  "people_daily_deep_read": "scripts/run_people_daily_deep_read.sh",
   "config": "config/market_immersion_config.json",
   "output_dir": "~/.openclaw/workspace/market-immersion",
   "phases": {
